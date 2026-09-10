@@ -1,0 +1,28 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.local
+backend/.env
+backend/src/.env
+frontend/.env
+*.sql
+tmp_screenshots/
+
+# Local deploy credentials / helper — never commit
+deploy_all.py
+deploy.local.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Internal audit docs / generated artifacts / scratch files
+AUDIT_REPORT.md
+KPI_AUDIT_RCA.md
+*_tmp.cjs
+frontend/eslint_output.json
+frontend/lint_output.txt
+eslint_output.json
+lint_output.txt

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(ls -la \"c:\\\\Users\\\\ACER\\\\Desktop\\\\pmhospital\\\\.claude\\\\skills\" 2>&1 || echo \"none\" *)",
+      "Read(//c/Users/ACER/AppData/Local/Temp/claude/bundled-skills/2.1.206/71f151c6fb7df13634016cc5a6f15596/run/examples/**)"
+    ]
+  }
+}

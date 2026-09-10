@@ -1,0 +1,464 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+ * BASE — Inter font, reset, smooth rendering
+ * ============================================ */
+:root {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #0f172a;
+  background-color: #f8fafc;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+
+  /* ── Brand palette ───────────────────────── */
+  --primary:        #4f46e5;
+  --primary-light:  #6366f1;
+  --primary-dark:   #4338ca;
+  --primary-bg:     #eef2ff;
+
+  /* ── Status colors ───────────────────────── */
+  --status-waiting:   #3b82f6;
+  --status-progress:  #f59e0b;
+  --status-completed: #10b981;
+  --status-cancelled: #ef4444;
+
+  /* ── Semantic ────────────────────────────── */
+  --success: #16a34a;
+  --error:   #dc2626;
+  --warning: #d97706;
+  --info:    #2563eb;
+
+  /* ── Sidebar ─────────────────────────────── */
+  --sidebar-bg:     #0f172a;
+  --sidebar-hover:  #1e293b;
+  --sidebar-active: #1e3a5f;
+
+  /* ── Neutral scale ───────────────────────── */
+  --gray-50:  #f8fafc;
+  --gray-100: #f1f5f9;
+  --gray-200: #e2e8f0;
+  --gray-300: #cbd5e1;
+  --gray-400: #94a3b8;
+  --gray-500: #64748b;
+  --gray-600: #475569;
+  --gray-700: #334155;
+  --gray-800: #1e293b;
+  --gray-900: #0f172a;
+
+  /* ── Touch target ───────────────────────── */
+  --min-touch: 44px;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #f8fafc;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Custom scrollbar ─────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Sidebar scrollbar — darker track */
+.sidebar-scroll::-webkit-scrollbar-thumb { background: #334155; }
+.sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* ── Focus ring ───────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ============================================
+ * FORM ELEMENTS
+ * ============================================ */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="date"],
+input[type="time"],
+input[type="tel"],
+input[type="search"],
+textarea,
+select {
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  font-family: inherit;
+  color: #0f172a;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  width: 100%;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--primary-light);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8;
+  font-size: 0.875rem;
+}
+
+/* Hide browser autofill / contact-picker icons injected by Chrome/Edge */
+input::-webkit-contacts-auto-fill-button,
+input::-webkit-credentials-auto-fill-button,
+input::-webkit-credit-card-auto-fill-button,
+input::-ms-reveal,
+input::-ms-clear {
+  visibility: hidden;
+  display: none !important;
+  pointer-events: none;
+}
+
+/* Remove native search decoration (cancel button, magnifier) */
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 1rem;
+  padding-right: 2.5rem;
+}
+
+/* ============================================
+ * BUTTON PRESETS
+ * ============================================ */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(79, 70, 229, 0.25);
+}
+.btn-primary:hover {
+  background: var(--primary-dark);
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+  transform: translateY(-1px);
+}
+.btn-primary:active { transform: scale(0.98); }
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #fff;
+  color: var(--primary);
+  border: 1.5px solid #e2e8f0;
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-secondary:hover {
+  border-color: var(--primary-light);
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #ef4444;
+  color: #fff;
+  border: none;
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-danger:hover { background: #dc2626; transform: translateY(-1px); }
+
+/* ============================================
+ * CARD
+ * ============================================ */
+.card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.card:hover {
+  box-shadow: 0 4px 14px rgba(0,0,0,.09), 0 2px 6px rgba(0,0,0,.05);
+  transform: translateY(-1px);
+}
+
+/* ============================================
+ * STATUS BADGES
+ * ============================================ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.badge-waiting   { background: #dbeafe; color: #1d4ed8; }
+.badge-progress  { background: #fef3c7; color: #b45309; }
+.badge-completed { background: #d1fae5; color: #065f46; }
+.badge-cancelled { background: #fee2e2; color: #991b1b; }
+
+/* ============================================
+ * SKELETON LOADER
+ * ============================================ */
+.skeleton {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+  border-radius: 0.375rem;
+}
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============================================
+ * PAGE TRANSITIONS
+ * ============================================ */
+.page-enter {
+  animation: page-fade 0.2s ease forwards;
+}
+@keyframes page-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Modal entrance animation */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+
+/* ============================================
+ * SMOOTH TRANSITIONS
+ * ============================================ */
+button, a, input, select, textarea {
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============================================
+ * VIP TIER COLORS
+ * ============================================ */
+.vip-platinum { background: linear-gradient(135deg,#9ca3af,#4b5563); }
+.vip-gold     { background: linear-gradient(135deg,#fbbf24,#d97706); }
+.vip-silver   { background: linear-gradient(135deg,#d1d5db,#9ca3af); }
+
+/* ============================================
+ * TABLE IMPROVEMENTS
+ * ============================================ */
+table { border-collapse: collapse; width: 100%; }
+th {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+  background: #f8fafc;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+}
+td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 0.875rem;
+  color: #1e293b;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #f8fafc; }
+
+/* ============================================
+ * REDUCED MOTION
+ * ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============================================
+ * RESPONSIVE TYPOGRAPHY — FLUID SCALE
+ * ============================================ */
+
+/* Tablet (768px) */
+@media (min-width: 768px) {
+  body { font-size: 0.9375rem; }
+}
+
+/* Desktop (1280px) */
+@media (min-width: 1280px) {
+  body { font-size: 1rem; }
+}
+
+/* Full HD LCD / Android TV (1920px) */
+@media (min-width: 1920px) {
+  body {
+    font-size: 1.0625rem;  /* 17px — comfortable at TV viewing distance */
+  }
+
+  /* Cards gain more breathing room */
+  .card {
+    padding: 1.75rem;
+  }
+
+  /* Buttons and interactive elements scale for D-pad / pointer */
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
+    padding: 0.875rem 1.75rem;
+    font-size: 1rem;
+    min-height: 52px;
+    border-radius: 0.625rem;
+  }
+
+  /* Focus ring — highly visible for TV remote use */
+  *:focus-visible {
+    outline: 3px solid var(--primary);
+    outline-offset: 4px;
+  }
+
+  /* Status badges scale up */
+  .badge {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.75rem;
+  }
+
+  /* Table cells */
+  th { font-size: 0.8rem; padding: 0.875rem 1.125rem; }
+  td { font-size: 0.9375rem; padding: 0.875rem 1.125rem; }
+}
+
+/* 4K UHD (2560px+) */
+@media (min-width: 2560px) {
+  body { font-size: 1.125rem; }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
+    padding: 1rem 2rem;
+    font-size: 1.0625rem;
+    min-height: 60px;
+    border-radius: 0.75rem;
+  }
+
+  .card {
+    padding: 2.25rem;
+    border-radius: 1rem;
+  }
+
+  *:focus-visible {
+    outline-width: 4px;
+    outline-offset: 5px;
+  }
+}
+
+/* ============================================
+ * TABLET-SPECIFIC OVERRIDES (768px–1023px)
+ * ============================================ */
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* Comfortable touch targets on tablet glass */
+  button,
+  a[role="button"],
+  input[type="button"],
+  input[type="submit"] {
+    min-height: 46px;
+  }
+
+  /* Inputs slightly taller for finger tap */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  input[type="time"],
+  input[type="tel"],
+  input[type="search"],
+  textarea,
+  select {
+    padding: 0.75rem 0.875rem;
+    font-size: 1rem;
+  }
+}
+
+/* ============================================
+ * ANDROID TV / SMART TV — POINTER: NONE
+ * (navigated via D-pad, no mouse/touch)
+ * ============================================ */
+@media (min-width: 1280px) and (pointer: none) {
+  /* Very bold focus rings for D-pad navigation */
+  *:focus,
+  *:focus-visible {
+    outline: 5px solid var(--primary);
+    outline-offset: 6px;
+    border-radius: 6px;
+    box-shadow: 0 0 0 8px rgba(79, 70, 229, 0.25);
+  }
+
+  /* Cursor is irrelevant; hide it */
+  * { cursor: none; }
+}
+
+/* ============================================
+ * OVERFLOW GUARD — all screen sizes
+ * ============================================ */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* ============================================
+ * HORIZONTAL SCROLL CONTAINERS
+ * (tables, code blocks on small screens)
+ * ============================================ */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}

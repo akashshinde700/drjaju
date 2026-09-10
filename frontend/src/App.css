@@ -1,0 +1,4 @@
+/* App-level overrides - kept minimal; Tailwind handles most styling via index.css */
+html {
+  scroll-behavior: smooth;
+}

@@ -1,0 +1,225 @@
+/**
+ * Button Component Styles
+ * Week 3: Design System Implementation
+ * 
+ * Features:
+ * - 4 variants (primary, secondary, danger, success)
+ * - 3 sizes (sm, md, lg)
+ * - Hover, active, disabled, loading states
+ * - Icon support
+ * - Accessibility support
+ */
+
+.btn {
+  /* Base Styles */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  
+  /* Typography */
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-normal);
+  
+  /* Spacing */
+  padding: var(--space-3) var(--space-4);
+  
+  /* Appearance */
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-base);
+  
+  /* Reset */
+  margin: 0;
+  background: none;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  
+  /* Focus */
+  outline: none;
+  
+  /* Touch target - WCAG requirement */
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* ============================================
+   VARIANTS
+   ============================================ */
+
+/* Primary Button */
+.btn--primary {
+  background-color: var(--color-primary-600);
+  color: white;
+  border-color: var(--color-primary-600);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background-color: var(--color-primary-700);
+  border-color: var(--color-primary-700);
+  box-shadow: var(--shadow-md);
+}
+
+.btn--primary:active:not(:disabled) {
+  background-color: var(--color-primary-800);
+  border-color: var(--color-primary-800);
+}
+
+.btn--primary:focus-visible {
+  outline: 2px solid var(--color-primary-300);
+  outline-offset: 2px;
+}
+
+/* Secondary Button */
+.btn--secondary {
+  background-color: var(--color-gray-200);
+  color: var(--color-gray-900);
+  border-color: var(--color-gray-200);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background-color: var(--color-gray-300);
+  border-color: var(--color-gray-300);
+}
+
+.btn--secondary:active:not(:disabled) {
+  background-color: var(--color-gray-400);
+  border-color: var(--color-gray-400);
+}
+
+/* Danger Button */
+.btn--danger {
+  background-color: var(--color-error-600);
+  color: white;
+  border-color: var(--color-error-600);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background-color: var(--color-error-700);
+  border-color: var(--color-error-700);
+}
+
+.btn--danger:active:not(:disabled) {
+  background-color: var(--color-error-800);
+  border-color: var(--color-error-800);
+}
+
+/* Success Button */
+.btn--success {
+  background-color: var(--color-success-600);
+  color: white;
+  border-color: var(--color-success-600);
+}
+
+.btn--success:hover:not(:disabled) {
+  background-color: var(--color-success-700);
+  border-color: var(--color-success-700);
+}
+
+.btn--success:active:not(:disabled) {
+  background-color: var(--color-success-800);
+  border-color: var(--color-success-800);
+}
+
+/* ============================================
+   SIZES
+   ============================================ */
+
+.btn--sm {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-sm);
+  min-height: 32px;
+}
+
+.btn--md {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-base);
+  min-height: 44px;
+}
+
+.btn--lg {
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--font-size-lg);
+  min-height: 52px;
+}
+
+/* ============================================
+   STATES
+   ============================================ */
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--loading {
+  pointer-events: none;
+}
+
+.btn__loader {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.btn__text {
+  display: inline-block;
+}
+
+.btn__icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+}
+
+.btn__icon--left {
+  margin-right: var(--space-1);
+}
+
+.btn__icon--right {
+  margin-left: var(--space-1);
+}
+
+/* ============================================
+   FULL WIDTH
+   ============================================ */
+
+.btn--full-width {
+  width: 100%;
+}
+
+/* ============================================
+   ACCESSIBILITY
+   ============================================ */
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-primary-400);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn {
+    transition: none;
+  }
+
+  .btn__loader {
+    animation: none;
+    border-right: 2px solid transparent;
+  }
+}

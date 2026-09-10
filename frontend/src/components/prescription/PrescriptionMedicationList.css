@@ -1,0 +1,180 @@
+/* PrescriptionMedicationList Component Styles */
+
+.prescription-medications {
+  width: 100%;
+  margin-top: 30px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08); /* More premium shadow */
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+}
+
+.medications-table-wrapper {
+  overflow-x: auto;
+  width: 100%;
+}
+
+.medications-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 900px; /* Ensure it doesn't get too cramped */
+}
+
+.medications-table th, 
+.medications-table td {
+  padding: 18px 20px;
+  text-align: left;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+
+.medications-table th {
+  background: #f8fafc;
+  font-weight: 700;
+  color: #475569;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-top: none;
+}
+
+/* increased widths */
+.medications-table th:nth-child(1) { width: 22%; } /* Medication */
+.medications-table th:nth-child(2) { width: 12%; } /* Dose */
+.medications-table th:nth-child(3) { width: 12%; } /* Frequency */
+.medications-table th:nth-child(4) { width: 15%; } /* Timing */
+.medications-table th:nth-child(5) { width: 10%; } /* Duration */
+.medications-table th:nth-child(6) { width: 20%; } /* Instructions */
+.medications-table th:nth-child(7) { width: 9%; }  /* Actions */
+
+.med-info strong {
+  display: block;
+  color: #1e293b;
+  font-size: 15px;
+}
+
+.med-info small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.timing-badge {
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 4px 10px;
+  border-radius: 100px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.instructions {
+  color: #64748b;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-icon.edit:hover {
+  background: #e0f2fe;
+  color: #0284c7;
+}
+
+.btn-icon.delete:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+/* Edit Mode Styles */
+.editing {
+  background-color: #f0f9ff !important;
+}
+
+.edit-dose {
+  display: flex;
+  gap: 4px;
+}
+
+.edit-input-small {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+  background: white;
+}
+
+.edit-timing {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edit-timing select, 
+.edit-timing input {
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+  background: white;
+}
+
+.edit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn-save {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-cancel {
+  background: #f1f5f9;
+  color: #475569;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.warnings {
+  padding: 10px 20px;
+  background: #fffbeb;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.warning-item {
+  color: #92400e;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
