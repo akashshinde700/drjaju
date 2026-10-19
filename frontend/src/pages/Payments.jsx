@@ -8,6 +8,8 @@ import { FiEdit2, FiSend, FiPrinter, FiTrash2, FiEye, FiDownload } from 'react-i
 import { openWhatsApp } from '../utils/whatsapp';
 import { pickArray } from '../utils/apiResponse';
 import { getLocalDateString } from '../utils/localDate';
+import LetterheadToggle from '../components/LetterheadToggle';
+import useBillLetterhead, { billPdfQuery } from '../hooks/useBillLetterhead';
 
 const paymentMethods = [
   { label: 'Cash',                value: 'cash'          },
@@ -60,8 +62,8 @@ export default function Payments() {
   const [customDate,    setCustomDate]    = useState({ start: '', end: '' });
   const [editingPayment,   setEditingPayment]   = useState(null);
   const [viewingReceipt,   setViewingReceipt]   = useState(null);
-  // Letterhead toggle for bill print/download (default: false = no header/footer)
-  const [billPrintLetterhead, setBillPrintLetterhead] = useState(false);
+  // With letterhead vs pre-printed paper — shared & remembered across billing screens
+  const [billPrintLetterhead, setBillPrintLetterhead] = useBillLetterhead();
   const amountPaidRef = useRef(null);
   const [quickPayLoading, setQuickPayLoading] = useState(null); // bill id being processed
   const [partialInputs, setPartialInputs] = useState({}); // bill id → amount string
@@ -219,8 +221,7 @@ export default function Payments() {
 
   const handlePrintReceipt = async (payment, withLetterhead = false) => {
     try {
-      const qs = withLetterhead ? '?with_letterhead=1' : '';
-      const response = await api.get(`/api/pdf/bill/${payment.id}${qs}`, { responseType: 'blob' });
+      const response = await api.get(`/api/pdf/bill/${payment.id}${billPdfQuery(withLetterhead)}`, { responseType: 'blob' });
       const blob = new Blob([response.data], { type: 'application/pdf' });
       const url  = window.URL.createObjectURL(blob);
       const win  = window.open(url, '_blank');
@@ -396,16 +397,8 @@ export default function Payments() {
             <option value="thismonth">This Month</option>
             <option value="custom">Custom Range</option>
           </select>
-          {/* Letterhead toggle for print */}
-          <label className="flex items-center gap-1.5 px-3 py-2 border rounded bg-slate-50 cursor-pointer text-sm text-slate-700 select-none whitespace-nowrap" title="Include clinic header & footer when printing bill">
-            <input
-              type="checkbox"
-              checked={billPrintLetterhead}
-              onChange={e => setBillPrintLetterhead(e.target.checked)}
-              className="cursor-pointer"
-            />
-            With Letterhead
-          </label>
+          {/* Print on letterhead or pre-printed paper (shared preference) */}
+          <LetterheadToggle value={billPrintLetterhead} onChange={setBillPrintLetterhead} size="sm" />
           <button
             onClick={handleDownloadReport}
             className="px-4 py-2 bg-slate-100 text-slate-700 rounded hover:bg-slate-200 flex items-center gap-2"

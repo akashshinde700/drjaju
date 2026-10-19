@@ -3,6 +3,7 @@ const { sendSuccess, sendError } = require('../utils/responseHelper');
 const { asyncHandler } = require('../utils');
 const PDFDocument = require('pdfkit');
 const { getLocalDateString } = require('../utils/localDate');
+const { resolveBillLetterhead } = require('../services/PdfGeneratorService');
 
 // Normalize raw bill-item payloads (both `items` and `service_items` shapes)
 // into the bill_items column shape. Single source of truth — this exact logic
@@ -394,7 +395,20 @@ async function getBill(req, res) {
     
     bill.items = items;
     bill.service_items = items;  // Also provide as service_items for frontend compatibility
-    
+
+    // The letterhead this bill prints with — resolved by the SAME rule the PDF
+    // uses, so the on-screen receipt and the printout can never disagree.
+    // (Previously the bill came back without its template's header/footer, so
+    // picking a template in Edit Receipt never showed up after saving.)
+    try {
+      const lh = await resolveBillLetterhead(db, bill);
+      bill.letterhead = lh;
+      bill.template_header_image = lh.header_image;
+      bill.template_header_content = lh.header_content;
+      bill.template_footer_image = lh.footer_image;
+      bill.template_footer_content = lh.footer_content;
+    } catch (_e) { /* letterhead is optional */ }
+
     res.json({ success: true, bill });
   } catch (error) {
     console.error('Get bill error:', error);
@@ -1078,7 +1092,9 @@ async function sendBillWhatsApp(req, res) {
     // Build public PDF URL (no auth required)
     const host = req.get('host');
     const protocol = req.protocol;
-    const pdfUrl = `${protocol}://${host}/api/pdf/bill/${id}`;
+    // A receipt sent on WhatsApp is a digital copy — it never lands on the
+    // clinic's pre-printed paper — so it always carries the letterhead.
+    const pdfUrl = `${protocol}://${host}/api/pdf/bill/${id}?with_letterhead=1`;
 
     // Build items list
     const [items] = await db.execute('SELECT service_name, quantity, unit_price, total_price FROM bill_items WHERE bill_id = ? ORDER BY sort_order', [id]);

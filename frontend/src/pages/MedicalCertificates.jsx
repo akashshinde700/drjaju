@@ -5,9 +5,39 @@ import Modal from '../components/Modal';
 import { useApiClient } from '../api/client';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../hooks/useAuth';
-import { downloadCertificatePDF } from '../services/pdfService';
+import { downloadCertificatePDF, openCertificatePDF } from '../services/pdfService';
+import LetterheadToggle from '../components/LetterheadToggle';
+import { useCertificateLetterhead } from '../hooks/useBillLetterhead';
 import { getSelectedDoctor } from '../utils/doctorUtils';
 import { getLocalDateString } from '../utils/localDate';
+
+/* ─── Printed-layout cleanup (mirrors the certificate PDF) ───────────────
+   Templates usually include their own title line and a trailing signature /
+   "Date:" block; the certificate layout already shows a title and signature,
+   so those lines would appear twice. */
+const cleanCertificateContent = (text, cert) => {
+  const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const titles = new Set([norm(cert?.certificate_title), norm(cert?.certificate_type_name)].filter(Boolean));
+  const first = lines.findIndex(l => l.trim() !== '');
+  if (first !== -1 && titles.has(norm(lines[first]))) lines.splice(0, first + 1);
+  const doctor = norm(String(cert?.doctor_name || '').replace(/^\s*dr\.?\s*/i, ''));
+  const qualification = norm(cert?.doctor_qualification);
+  const isSignatureLine = (line) => {
+    const raw = line.trim();
+    if (!raw) return true;
+    if (raw.length > 60) return false;
+    const n = norm(raw);
+    return /^date\s*[:-]?\s*(\d|\{\{)/i.test(raw)
+      || (doctor && (n === doctor || n === `dr ${doctor}`))
+      || /^reg(istration)?\.?\s*(no\.?|number)?\s*[:-]?\s*\S+$/i.test(raw)
+      || (qualification && n === qualification)
+      || /^(doctor s |doctors |medical officer s )?signature\b|^authori[sz]ed signatory/.test(n);
+  };
+  while (lines.length && isSignatureLine(lines[lines.length - 1])) lines.pop();
+  while (lines.length && lines[0].trim() === '') lines.shift();
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n');
+};
 
 /* ─── Standard paragraph template ─────────────────────────────────────── */
 const STANDARD_PARAGRAPH = `This is to certify that Mr./Ms. {{patient_name}}, Age {{age}} years,
@@ -325,6 +355,22 @@ export default function MedicalCertificates() {
     } catch { addToast('Failed to delete certificate', 'error'); }
   };
 
+  // With the prescription-pad letterhead, or plain (pre-printed) paper —
+  // remembered in the browser like the pad.
+  const [withLetterhead, setWithLetterhead] = useCertificateLetterhead();
+  const [pdfBusy, setPdfBusy] = useState(false);
+
+  const printCertificate = async (cert) => {
+    setPdfBusy(true);
+    try { await openCertificatePDF(cert.id, { withLetterhead }); }
+    catch { addToast('Failed to open certificate PDF', 'error'); }
+    finally { setPdfBusy(false); }
+  };
+  const downloadCertificate = async (cert) => {
+    try { await downloadCertificatePDF(cert.id, { withLetterhead }); }
+    catch { addToast('Failed to download certificate PDF', 'error'); }
+  };
+
   const handleViewCertificate = async (cert) => {
     try {
       const res = await api.get(`/api/medical-certificates/${cert.id}`);
@@ -490,6 +536,10 @@ export default function MedicalCertificates() {
               {certificateTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </div>
+          <div>
+            <label className="block text-sm font-medium mb-2">Print on</label>
+            <LetterheadToggle value={withLetterhead} onChange={setWithLetterhead} />
+          </div>
           <div className="flex gap-3">
             <button onClick={() => { resetCertificateForm(); setShowCreateModal(true); }} className="px-4 py-2 bg-primary text-white rounded hover:bg-primary/90">
               Create Certificate
@@ -535,7 +585,7 @@ export default function MedicalCertificates() {
                   <td className="px-4 py-3 text-sm">
                     <div className="flex gap-2">
                       <button onClick={() => handleViewCertificate(cert)} className="text-blue-600 hover:underline">View</button>
-                      <button onClick={() => downloadCertificatePDF(cert.id)} className="text-green-600 hover:underline flex items-center gap-1" title="Download PDF">
+                      <button onClick={() => downloadCertificate(cert)} className="text-green-600 hover:underline flex items-center gap-1" title={withLetterhead ? 'Download PDF with letterhead' : 'Download PDF for pre-printed paper'}>
                         <FiDownload className="w-3 h-3" /> PDF
                       </button>
                       <button onClick={() => handleDeleteCertificate(cert.id)} className="text-red-600 hover:underline">Delete</button>
@@ -746,7 +796,8 @@ export default function MedicalCertificates() {
 
           {/* Header Image */}
           <div>
-            <label className="block text-sm font-medium mb-2">Header Image (Optional)</label>
+            <label className="block text-sm font-medium mb-1">Header Image (Optional)</label>
+            <p className="text-xs text-slate-500 mb-2">Leave empty to use the prescription pad letterhead automatically.</p>
             <input type="file" accept="image/*" className="w-full px-3 py-2 border rounded text-sm"
               onChange={e => { const f = e.target.files[0]; if (f) { const r = new FileReader(); r.onloadend = () => setCertificateForm(p => ({ ...p, header_image: r.result })); r.readAsDataURL(f); } }} />
             {certificateForm.header_image && (
@@ -759,7 +810,8 @@ export default function MedicalCertificates() {
 
           {/* Footer Image */}
           <div>
-            <label className="block text-sm font-medium mb-2">Footer Image (Optional)</label>
+            <label className="block text-sm font-medium mb-1">Footer Image (Optional)</label>
+            <p className="text-xs text-slate-500 mb-2">Leave empty to use the prescription pad footer.</p>
             <input type="file" accept="image/*" className="w-full px-3 py-2 border rounded text-sm"
               onChange={e => { const f = e.target.files[0]; if (f) { const r = new FileReader(); r.onloadend = () => setCertificateForm(p => ({ ...p, footer_image: r.result })); r.readAsDataURL(f); } }} />
             {certificateForm.footer_image && (
@@ -811,23 +863,50 @@ export default function MedicalCertificates() {
       {/* ── View Certificate Modal ────────────────────────────────── */}
       {/* ════════════════════════════════════════════════════════════ */}
       <Modal isOpen={showViewModal} onClose={() => { setShowViewModal(false); setViewingCertificate(null); }} title="Medical Certificate" size="xl">
-        {viewingCertificate && (
+        {viewingCertificate && (() => {
+          const lh = viewingCertificate.letterhead || {
+            header_image: viewingCertificate.header_image || null,
+            footer_image: viewingCertificate.footer_image || null,
+          };
+          const hasHeaderArt = Boolean(lh.header_image || lh.header_content);
+          const sourceLabel = {
+            certificate: 'Images uploaded on this certificate',
+            pad: 'Prescription pad letterhead',
+            default_template: `Clinic default template${lh.template_name ? ` (${lh.template_name})` : ''}`,
+            clinic: 'Clinic name & address (no letterhead image set)',
+          }[lh.source];
+          return (
           <div className="space-y-6">
-            <div className="border-2 rounded p-8 bg-white" id="certificate-print">
-              {viewingCertificate.header_image && (
-                <div className="text-center mb-6">
-                  <img src={viewingCertificate.header_image} alt="Header" className="max-h-40 mx-auto" onError={e => e.target.style.display = 'none'} />
+            {/* Print options — same choice as the prescription pad */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 rounded-lg border bg-slate-50 px-3 py-2.5">
+              <LetterheadToggle value={withLetterhead} onChange={setWithLetterhead} />
+              <p className="text-xs text-slate-500">
+                {withLetterhead
+                  ? (sourceLabel ? `Letterhead: ${sourceLabel}` : 'Printed with the clinic letterhead')
+                  : 'Top of the page stays blank for your pre-printed letterhead.'}
+              </p>
+            </div>
+
+            <div className="border-2 rounded p-8 bg-white overflow-hidden" id="certificate-print">
+              {!withLetterhead && (
+                <div className="-mx-8 -mt-8 mb-6 h-24 border-b border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-xs text-slate-400">
+                  Pre-printed letterhead area (left blank)
                 </div>
               )}
-              <div className="text-center mb-6 border-b-2 pb-4">
-                {viewingCertificate.clinic_name && (
-                  <>
-                    <h2 className="text-2xl font-bold text-slate-800">{viewingCertificate.clinic_name}</h2>
-                    {viewingCertificate.clinic_address && <p className="text-sm text-slate-600">{viewingCertificate.clinic_address}</p>}
-                    {viewingCertificate.clinic_phone  && <p className="text-sm text-slate-600">Phone: {viewingCertificate.clinic_phone}</p>}
-                  </>
-                )}
-                <h3 className="text-xl font-bold text-slate-800 mt-4">{viewingCertificate.certificate_title}</h3>
+              {withLetterhead && lh.header_image && (
+                <div className="-mx-8 -mt-8 mb-4">
+                  <img src={lh.header_image} alt="Letterhead" className="w-full h-auto block" onError={e => e.target.style.display = 'none'} />
+                </div>
+              )}
+              {withLetterhead && !hasHeaderArt && viewingCertificate.clinic_name && (
+                <div className="text-center mb-4 pb-3 border-b-2">
+                  <h2 className="text-2xl font-bold text-slate-800">{viewingCertificate.clinic_name}</h2>
+                  {viewingCertificate.clinic_address && <p className="text-sm text-slate-600">{viewingCertificate.clinic_address}</p>}
+                  {viewingCertificate.clinic_phone  && <p className="text-sm text-slate-600">Phone: {viewingCertificate.clinic_phone}</p>}
+                </div>
+              )}
+              <div className="text-center mb-6">
+                <h3 className="text-xl font-bold text-slate-800 mt-2 uppercase tracking-wide">{viewingCertificate.certificate_title}</h3>
               </div>
 
               <div className="mb-6">
@@ -838,7 +917,7 @@ export default function MedicalCertificates() {
               {/* Certificate content — variables already substituted at creation time */}
               <div className="mb-6">
                 <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                  {substituteVars(viewingCertificate.certificate_content, viewingCertificate)}
+                  {cleanCertificateContent(substituteVars(viewingCertificate.certificate_content, viewingCertificate), viewingCertificate)}
                 </div>
               </div>
 
@@ -854,7 +933,10 @@ export default function MedicalCertificates() {
               )}
 
               <div className="mt-12 text-right">
-                <div className="inline-block border-t border-slate-400 pt-2 min-w-[200px]">
+                <div className="inline-block pt-2 min-w-[200px]">
+                  {lh.signature_image
+                    ? <img src={lh.signature_image} alt="Signature" className="h-14 ml-auto mb-1" onError={e => e.target.style.display = 'none'} />
+                    : <div className="border-t border-slate-400 mb-2" />}
                   <p className="text-sm font-semibold">{viewingCertificate.doctor_name}</p>
                   {viewingCertificate.doctor_registration_no && <p className="text-xs text-slate-600">{viewingCertificate.doctor_registration_no}</p>}
                 </div>
@@ -864,22 +946,30 @@ export default function MedicalCertificates() {
                 <p>Date: {new Date(viewingCertificate.issued_date).toLocaleDateString('en-IN')}</p>
               </div>
 
-              {viewingCertificate.footer_image && (
-                <div className="text-center mt-6">
-                  <img src={viewingCertificate.footer_image} alt="Footer" className="max-h-40 mx-auto" onError={e => e.target.style.display = 'none'} />
+              {withLetterhead && lh.footer_image && (
+                <div className="-mx-8 -mb-8 mt-8">
+                  <img src={lh.footer_image} alt="Footer" className="w-full h-auto block" onError={e => e.target.style.display = 'none'} />
                 </div>
               )}
             </div>
 
             <div className="flex gap-3">
               <button onClick={() => { setShowViewModal(false); setViewingCertificate(null); }} className="flex-1 px-4 py-2 border rounded hover:bg-slate-50">Close</button>
-              <button onClick={() => window.print()} className="flex-1 px-4 py-2 bg-slate-600 text-white rounded hover:bg-slate-700">Print</button>
-              <button onClick={() => downloadCertificatePDF(viewingCertificate.id)} className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/90 flex items-center justify-center gap-2">
+              <button
+                onClick={() => printCertificate(viewingCertificate)}
+                disabled={pdfBusy}
+                className="flex-1 px-4 py-2 bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-60"
+                title={withLetterhead ? 'Print with letterhead' : 'Print on pre-printed paper'}
+              >
+                {pdfBusy ? 'Opening…' : 'Print'}
+              </button>
+              <button onClick={() => downloadCertificate(viewingCertificate)} className="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary/90 flex items-center justify-center gap-2">
                 <FiDownload /> Download PDF
               </button>
             </div>
           </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* ════════════════════════════════════════════════════════════ */}

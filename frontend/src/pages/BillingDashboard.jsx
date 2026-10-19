@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { FiDollarSign, FiFileText, FiTrendingUp, FiClock, FiCheckCircle, FiAlertCircle, FiSearch, FiFilter, FiDownload } from 'react-icons/fi';
 import { useApiClient } from '../api/client';
+import useBillLetterhead, { billPdfQuery } from '../hooks/useBillLetterhead';
 import { openWhatsApp } from '../utils/whatsapp';
 import { getLocalDateString } from '../utils/localDate';
 
@@ -42,6 +43,7 @@ const computeDateRange = (range) => {
 
 const BillingDashboard = () => {
   const api = useApiClient();
+  const [billWithLetterhead] = useBillLetterhead();
   const [bills, setBills] = useState([]);
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
@@ -180,7 +182,7 @@ const BillingDashboard = () => {
   // Generate PDF
   const generatePDF = async (billId) => {
     try {
-      window.open(`/api/pdf/bill/${billId}`, '_blank');
+      window.open(`/api/pdf/bill/${billId}${billPdfQuery(billWithLetterhead)}`, '_blank');
     } catch (error) {
       console.error('Error generating PDF:', error);
     }

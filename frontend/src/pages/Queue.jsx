@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import HeaderBar from '../components/HeaderBar';
 import Modal from '../components/Modal';
 import { useApiClient } from '../api/client';
+import useBillLetterhead, { billPdfQuery } from '../hooks/useBillLetterhead';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../context/AuthContext';
 import AddPatientModal from '../components/AddPatientModal';
@@ -169,6 +170,7 @@ const AppointmentCardMemo = React.memo(({ apt, isSelected, onSelect, onVisit, on
 
 export default function Queue() {
   const api = useApiClient();
+  const [billWithLetterhead] = useBillLetterhead();
   const { user } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
@@ -3117,7 +3119,7 @@ Prescription Link: ${pdfUrl}`;
 
                                     const billId = await ensureLatestBillId(apt);
                                     if (billId) {
-                                      window.open(`/api/pdf/bill/${billId}`, '_blank');
+                                      window.open(`/api/pdf/bill/${billId}${billPdfQuery(billWithLetterhead)}`, '_blank');
                                       return;
                                     }
 

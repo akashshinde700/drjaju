@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import DOMPurify from 'dompurify';
 import { useSearchParams } from 'react-router-dom';
-import { useReactToPrint } from 'react-to-print';
 import { FiDownload, FiTrash2 } from 'react-icons/fi';
 import HeaderBar from '../components/HeaderBar';
 import Modal from '../components/Modal';
@@ -10,6 +9,8 @@ import { useToast } from '../hooks/useToast';
 import { useAuth } from '../context/AuthContext';
 import { openWhatsApp } from '../utils/whatsapp';
 import { downloadBillingPDF } from '../services/pdfService';
+import LetterheadToggle from '../components/LetterheadToggle';
+import useBillLetterhead, { billPdfQuery } from '../hooks/useBillLetterhead';
 import { pickArray } from '../utils/apiResponse';
 
 // Helper function to safely format numbers
@@ -78,12 +79,13 @@ export default function Receipts() {
   const [allServices, setAllServices] = useState([]); // flat list
   const [openGroupPopover, setOpenGroupPopover] = useState(null); // group id with open popover
 
-  // Print ref for react-to-print
+  // Print with the clinic letterhead or on pre-printed paper — shared,
+  // remembered preference across all billing screens.
+  const [withLetterhead, setWithLetterhead] = useBillLetterhead();
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
+  // Preview container (printing goes through the server PDF — see printReceiptPdf)
   const printRef = useRef(null);
-  const handlePrint = useReactToPrint({
-    contentRef: printRef,
-    documentTitle: 'Receipt'
-  });
 
   // Create receipt form state
   const [patientSearch, setPatientSearch] = useState('');
@@ -422,25 +424,13 @@ export default function Receipts() {
   }, [showViewAllModal, fetchReceipts]);
 
   // Template selection handler (must be defined before the useEffect that uses it)
+  // A template is the receipt's letterhead (header/footer art). It used to be
+  // copied into Notes/Remarks too, silently overwriting whatever was typed
+  // there and printing the template text a second time as "Remarks".
   const handleTemplateSelect = useCallback((templateId) => {
-    const selectedTemplate = receiptTemplates.find(t => t.id === parseInt(templateId));
-
-    if (selectedTemplate) {
-      setReceiptForm({
-        ...receiptForm,
-        template_id: templateId,
-        notes: selectedTemplate.footer_content || '',
-        remarks: selectedTemplate.header_content || ''
-      });
-    } else {
-      setReceiptForm({
-        ...receiptForm,
-        template_id: '',
-        notes: '',
-        remarks: ''
-      });
-    }
-  }, [receiptTemplates, receiptForm]);
+    const exists = receiptTemplates.some(t => t.id === parseInt(templateId));
+    setReceiptForm(prev => ({ ...prev, template_id: exists ? templateId : '' }));
+  }, [receiptTemplates]);
 
   // Auto-select default template when creating new receipt
   useEffect(() => {
@@ -451,6 +441,66 @@ export default function Receipts() {
       }
     }
   }, [receiptTemplates, showCreateModal, receiptForm.template_id, handleTemplateSelect]);
+
+  // Which letterhead a receipt shows — mirrors the server's rule so the
+  // preview matches the PDF: picked template → server-resolved (default
+  // template / doctor's pad header) → clinic default template → legacy fields.
+  const defaultReceiptTemplate = receiptTemplates.find(t => t.is_default) || null;
+  const resolvePreviewLetterhead = (receipt) => {
+    const fromTemplate = (t) => ({
+      template_name: t.template_name,
+      header_image: t.header_image || null,
+      header_content: t.header_content || null,
+      footer_image: t.footer_image || null,
+      footer_content: t.footer_content || null,
+    });
+    const picked = receipt?.template_id
+      ? receiptTemplates.find(t => t.id === parseInt(receipt.template_id))
+      : null;
+    if (picked) return fromTemplate(picked);
+    if (receipt?.letterhead && receipt.letterhead.source !== 'template') return receipt.letterhead;
+    if (defaultReceiptTemplate) return fromTemplate(defaultReceiptTemplate);
+    return {
+      header_image: receipt?.template_header_image || null,
+      header_content: receipt?.template_header_content || null,
+      footer_image: receipt?.template_footer_image || null,
+      footer_content: receipt?.template_footer_content || null,
+    };
+  };
+
+  // Change a receipt's letterhead straight from the receipt view: saved to the
+  // bill immediately so Print / PDF / WhatsApp all pick it up — no Edit modal.
+  const applyReceiptTemplate = async (templateId) => {
+    if (!selectedReceipt?.id) return;
+    const previous = selectedReceipt.template_id ?? null;
+    const next = templateId ? parseInt(templateId) : null;
+    setSelectedReceipt(r => ({ ...r, template_id: next }));
+    setSavingTemplate(true);
+    try {
+      await api.put(`/api/bills/${selectedReceipt.id}`, { template_id: next });
+      const res = await api.get(`/api/bills/${selectedReceipt.id}`);
+      const fresh = res.data?.bill || res.data;
+      setSelectedReceipt(r => ({ ...r, ...fresh, justCreated: r.justCreated }));
+      fetchReceipts();
+      addToast('Letterhead updated for this receipt', 'success');
+    } catch (error) {
+      setSelectedReceipt(r => ({ ...r, template_id: previous }));
+      addToast('Could not change letterhead: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  // Print = the same server-rendered PDF as Download/WhatsApp (what you print
+  // is exactly what you send). The route is public, so a plain window.open
+  // straight from the click keeps popup blockers happy.
+  const printReceiptPdf = (receipt) => {
+    if (!receipt?.id) {
+      addToast('Receipt ID not available. Please try again.', 'error');
+      return;
+    }
+    window.open(`/api/pdf/bill/${receipt.id}${billPdfQuery(withLetterhead)}`, '_blank');
+  };
 
   // NEW: Helper function to get clinic info from receipt or settings
   const getClinicInfo = (receipt = null) => {
@@ -721,7 +771,11 @@ export default function Receipts() {
       <div className="bg-white border rounded shadow-sm p-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
           <h2 className="text-lg font-semibold">All Receipts</h2>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 mr-1">
+              <span className="text-xs font-medium text-slate-500 hidden sm:inline">Print on:</span>
+              <LetterheadToggle value={withLetterhead} onChange={setWithLetterhead} size="sm" />
+            </div>
             <button
               onClick={() => setShowViewAllModal(true)}
               type="button"
@@ -910,9 +964,9 @@ export default function Receipts() {
                           View
                         </button>
                         <button
-                          onClick={() => downloadBillingPDF(receipt.id)}
+                          onClick={() => downloadBillingPDF(receipt.id, { withLetterhead })}
                           className="text-green-600 hover:underline flex items-center gap-1"
-                          title="Download as PDF"
+                          title={withLetterhead ? 'Download PDF with letterhead' : 'Download PDF for pre-printed paper'}
                         >
                           <FiDownload className="w-3 h-3" />
                           PDF
@@ -1073,7 +1127,7 @@ export default function Receipts() {
 
           {/* Template Selection */}
           <div>
-            <label className="block text-sm font-medium mb-2">Receipt Template (Optional)</label>
+            <label className="block text-sm font-medium mb-2">Letterhead Template (Optional)</label>
             <div className="flex gap-2">
               <select
                 className="flex-1 px-3 py-2 border rounded"
@@ -1484,6 +1538,8 @@ export default function Receipts() {
         {selectedReceipt && (() => {
           // Get dynamic clinic info
           const clinic = getClinicInfo(selectedReceipt);
+          const lh = resolvePreviewLetterhead(selectedReceipt);
+          const hasLetterheadArt = Boolean(lh.header_image || lh.header_content);
           
           return (
             <div className="space-y-6">
@@ -1502,31 +1558,59 @@ export default function Receipts() {
                 </div>
               )}
 
-              {/* Receipt Preview with DYNAMIC Clinic Header */}
-              <div className="border rounded p-6 bg-white" ref={printRef}>
+              {/* Print options — chosen right where you print */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 rounded-lg border bg-slate-50 px-3 py-2.5 print:hidden">
+                <LetterheadToggle value={withLetterhead} onChange={setWithLetterhead} />
+                {withLetterhead ? (
+                  <label className="flex items-center gap-2 text-sm min-w-0">
+                    <span className="text-slate-500 whitespace-nowrap">Letterhead</span>
+                    <select
+                      className="min-w-0 flex-1 md:w-56 px-2 py-1.5 border rounded bg-white disabled:opacity-60"
+                      value={selectedReceipt.template_id || ''}
+                      disabled={savingTemplate}
+                      onChange={(e) => applyReceiptTemplate(e.target.value)}
+                    >
+                      <option value="">
+                        Clinic default{defaultReceiptTemplate ? ` (${defaultReceiptTemplate.template_name})` : ''}
+                      </option>
+                      {receiptTemplates.map(t => (
+                        <option key={t.id} value={t.id}>{t.template_name}</option>
+                      ))}
+                    </select>
+                    {savingTemplate && <span className="text-xs text-slate-400 whitespace-nowrap">Saving…</span>}
+                  </label>
+                ) : (
+                  <p className="text-xs text-slate-500">Top of the page stays blank for your pre-printed letterhead.</p>
+                )}
+              </div>
+
+              {/* Receipt Preview */}
+              <div className="border rounded p-6 bg-white overflow-hidden" ref={printRef}>
+                {!withLetterhead && (
+                  <div className="-mx-6 -mt-6 mb-5 h-20 border-b border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-xs text-slate-400">
+                    Pre-printed letterhead area (left blank)
+                  </div>
+                )}
+
                 {/* Template Header Image */}
-                {selectedReceipt.template_header_image && (
-                  <div className="mb-4 text-center">
-                    <img
-                      src={selectedReceipt.template_header_image}
-                      alt="Header"
-                      className="max-w-full h-auto max-h-32 mx-auto"
-                    />
+                {withLetterhead && lh.header_image && (
+                  <div className="-mx-6 -mt-6 mb-4">
+                    <img src={lh.header_image} alt="Letterhead" className="w-full h-auto block" />
                   </div>
                 )}
 
                 {/* Template Header Content */}
-                {selectedReceipt.template_header_content && (
+                {withLetterhead && lh.header_content && (
                   <div className="mb-4 pb-4 border-b">
                     <div
                       className="text-sm text-slate-700"
-                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedReceipt.template_header_content) }}
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(lh.header_content) }}
                     />
                   </div>
                 )}
 
                 {/* Clinic Header - Only show if no template header */}
-                {!selectedReceipt.template_header_image && (
+                {withLetterhead && !hasLetterheadArt && (
                   <div className="text-center mb-6 pb-4 border-b">
                     {clinic.logo && (
                       <img
@@ -1682,28 +1766,24 @@ export default function Receipts() {
                 </div>
 
                 {/* Template Footer Content */}
-                {selectedReceipt.template_footer_content && (
+                {withLetterhead && lh.footer_content && (
                   <div className="mt-6 pt-4 border-t">
                     <div
                       className="text-sm text-slate-600 text-center"
-                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedReceipt.template_footer_content) }}
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(lh.footer_content) }}
                     />
                   </div>
                 )}
 
                 {/* Template Footer Image */}
-                {selectedReceipt.template_footer_image && (
-                  <div className="mt-4 text-center">
-                    <img
-                      src={selectedReceipt.template_footer_image}
-                      alt="Footer"
-                      className="max-w-full h-auto max-h-24 mx-auto"
-                    />
+                {withLetterhead && lh.footer_image && (
+                  <div className="-mx-6 -mb-6 mt-4">
+                    <img src={lh.footer_image} alt="Footer" className="w-full h-auto block" />
                   </div>
                 )}
 
                 {/* Default Footer (if no template footer) */}
-                {!selectedReceipt.template_footer_content && !selectedReceipt.template_footer_image && (
+                {withLetterhead && !lh.footer_content && !lh.footer_image && (
                   <div className="text-center mt-6 pt-4 border-t text-xs text-slate-500">
                     <p>Thank you for choosing {clinic.name}</p>
                     <p>This is a computer generated receipt</p>
@@ -1778,8 +1858,9 @@ export default function Receipts() {
                 </button>
                 <button
                   type="button"
-                  onClick={handlePrint}
+                  onClick={() => printReceiptPdf(selectedReceipt)}
                   className="px-4 py-2 border rounded hover:bg-slate-50 flex items-center justify-center gap-2 transition active:scale-[0.98]"
+                  title={withLetterhead ? 'Print with letterhead' : 'Print on pre-printed paper'}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
@@ -1794,7 +1875,7 @@ export default function Receipts() {
                       return;
                     }
                     try {
-                      const response = await api.get(`/api/pdf/bill/${selectedReceipt.id}`, {
+                      const response = await api.get(`/api/pdf/bill/${selectedReceipt.id}${billPdfQuery(withLetterhead)}`, {
                         responseType: 'blob'
                       });
 
@@ -2148,33 +2229,17 @@ export default function Receipts() {
 
             {/* Template Selection */}
             <div>
-              <label className="block text-sm font-medium mb-2">Receipt Template (Optional)</label>
+              <label className="block text-sm font-medium mb-2">Letterhead Template (Optional)</label>
               <div className="flex gap-2">
                 <select
                   className="flex-1 px-3 py-2 border rounded"
                   value={editingReceipt.template_id || ''}
                   onChange={(e) => {
                     const templateId = e.target.value;
-                    const selectedTemplate = receiptTemplates.find(t => t.id === parseInt(templateId));
-
-                    if (selectedTemplate) {
-                      setEditingReceipt({
-                        ...editingReceipt,
-                        template_id: templateId,
-                        notes: selectedTemplate.footer_content || '',
-                        remarks: selectedTemplate.header_content || ''
-                      });
-                    } else {
-                      setEditingReceipt({
-                        ...editingReceipt,
-                        template_id: '',
-                        notes: '',
-                        remarks: ''
-                      });
-                    }
+                    setEditingReceipt(prev => ({ ...prev, template_id: templateId || '' }));
                   }}
                 >
-                  <option value="">No template (use clinic default)</option>
+                  <option value="">Clinic default{defaultReceiptTemplate ? ` (${defaultReceiptTemplate.template_name})` : ''}</option>
                   {receiptTemplates.map(template => (
                     <option key={template.id} value={template.id}>
                       {template.template_name} {template.is_default ? '(Default)' : ''}
@@ -2192,7 +2257,7 @@ export default function Receipts() {
                 )}
               </div>
               <p className="text-xs text-slate-500 mt-1">
-                Select a template to add custom header/footer to this receipt
+                Header/footer printed when <span className="font-medium">With Letterhead</span> is on. You can also switch it from the receipt view.
               </p>
             </div>
 
@@ -2619,8 +2684,8 @@ export default function Receipts() {
                     const res2 = await api.get(`/api/bills/${editingReceipt.id}`);
                     const updatedReceiptFromServer = res2.data.bill;
 
-                    // Set the selected receipt with fresh data from server (includes template data)
-                    setSelectedReceipt(updatedReceiptFromServer);
+                    // Fresh bill from the server — now carries the resolved letterhead.
+                    setSelectedReceipt({ ...updatedReceiptFromServer, justCreated: false });
                     setShowEditModal(false);
                     setShowSuccessModal(true);
                   } catch (error) {

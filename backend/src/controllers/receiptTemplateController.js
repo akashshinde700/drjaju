@@ -72,11 +72,13 @@ async function createReceiptTemplate(req, res) {
 
     const db = getDb();
 
-    // If this is set as default, unset other defaults for the same clinic
-    if (is_default && clinic_id) {
+    // Only one default per clinic. `<=>` is NULL-safe: templates saved without a
+    // clinic_id used to skip this entirely, leaving several "Default" templates
+    // and an unpredictable letterhead on receipts.
+    if (is_default) {
       await db.execute(
-        'UPDATE receipt_templates SET is_default = 0 WHERE clinic_id = ?',
-        [clinic_id]
+        'UPDATE receipt_templates SET is_default = 0 WHERE clinic_id <=> ?',
+        [clinic_id || null]
       );
     }
 
@@ -131,11 +133,11 @@ async function updateReceiptTemplate(req, res) {
       return res.status(404).json({ error: 'Template not found' });
     }
 
-    // If this is set as default, unset other defaults for the same clinic
-    if (is_default && existing[0].clinic_id) {
+    // Only one default per clinic (NULL-safe, see createReceiptTemplate).
+    if (is_default) {
       await db.execute(
-        'UPDATE receipt_templates SET is_default = 0 WHERE clinic_id = ? AND id != ?',
-        [existing[0].clinic_id, id]
+        'UPDATE receipt_templates SET is_default = 0 WHERE clinic_id <=> ? AND id != ?',
+        [existing[0].clinic_id ?? null, id]
       );
     }
 

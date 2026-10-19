@@ -323,10 +323,17 @@ async function generatePrescriptionPDF({ prescriptionId, overrideTemplateId = nu
   // printing onto pre-printed stationery, so that band must clear the printed
   // header on EVERY page — which is exactly what "all patient names merged into
   // the blue strip" was: the band was fixed and could not be tuned per printer.
-  const topBandMm = printLayout
-    ? marginTopMm + contentTopMm
-    : (withLetterhead ? 10 : BLANK_LETTERHEAD_MM);
-  const bottomBandMm = printLayout ? marginBottomMm + contentBottomMm : 0;
+  // The Rx Template bands exist to clear a header/footer PRE-PRINTED on the
+  // paper, so they only apply when printing WITHOUT a letterhead. With a
+  // letterhead the banner is drawn at the very top of the page ourselves —
+  // reserving the band as well left an empty strip above the letterhead and
+  // pushed the doctor's signature onto a second sheet.
+  const topBandMm = withLetterhead
+    ? 10
+    : (printLayout ? marginTopMm + contentTopMm : BLANK_LETTERHEAD_MM);
+  const bottomBandMm = withLetterhead
+    ? 0
+    : (printLayout ? marginBottomMm + contentBottomMm : 0);
 
   let headerImg = null;
   let footerImg = null;
@@ -701,15 +708,28 @@ ${withLetterhead && footerImg ? `<div style="position:fixed;bottom:0;left:0;righ
     } catch (e) { /* use default */ }
     browser = await puppeteer.launch(launchOpts);
     const page = await browser.newPage();
+    if (withLetterhead) await page.setViewport({ width: 794, height: 1123 }); // A4 @ 96dpi for measuring
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
     // withLetterhead+footerImg already renders its own fixed-position footer
     // image inside the page content, so leave Puppeteer's own footer blank
     // there. Otherwise show a small branded "Page X / Y" footer instead of
     // letting Chrome print its default URL/date header-footer.
     const useNativeFooter = !(withLetterhead && footerImg);
+    // Letterhead prints only: when the Rx overflows the sheet by a little (e.g.
+    // just the signature spilling over), shrink slightly to keep it on ONE
+    // page. A genuinely long Rx still paginates at normal size. Plain-paper
+    // prints are left exactly as they were.
+    let scale = 1;
+    if (withLetterhead) {
+      const marginTop = Math.max(0, topBandMm - 10);
+      const marginBottom = Math.max(footerImg ? 25 : (useNativeFooter ? 10 : 0), bottomBandMm);
+      const needed = await fitToOnePageScale(page, { marginTopMm: marginTop, marginBottomMm: marginBottom, minScale: 0 });
+      if (needed < 1 && needed >= 0.85) scale = needed;
+    }
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
+      scale,
       displayHeaderFooter: true,
       headerTemplate: '<div></div>',
       footerTemplate: useNativeFooter
@@ -740,7 +760,492 @@ ${withLetterhead && footerImg ? `<div style="position:fixed;bottom:0;left:0;righ
   }
 }
 
-async function generateBillingPDF({ billId, withLetterhead = false }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Receipt / bill letterhead
+// ─────────────────────────────────────────────────────────────────────────────
+
+const toImgSrc = (v) => {
+  if (!v) return null;
+  const s = String(v);
+  return s.startsWith('data:') || /^https?:\/\//i.test(s) ? s : `data:image/png;base64,${s}`;
+};
+
+// Template header/footer HTML is authored by clinic admins; strip anything
+// executable before handing it to the headless renderer.
+const safeTemplateHtml = (html) => (html ? String(html)
+  .replace(/<script[\s\S]*?<\/script>/gi, '')
+  .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+  .replace(/javascript:/gi, '') : '');
+
+// Pixel size of a data-URL image (PNG / JPEG / GIF) without extra deps — used
+// to size the page's bottom margin so a letterhead footer sits flush at the
+// bottom edge of every page instead of floating above an arbitrary gap.
+function imageSizeFromDataUrl(src) {
+  try {
+    const m = /^data:[^;]+;base64,(.*)$/.exec(String(src || ''));
+    if (!m) return null;
+    const b = Buffer.from(m[1], 'base64');
+    if (b.length > 24 && b[0] === 0x89 && b.toString('ascii', 1, 4) === 'PNG') {
+      return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+    }
+    if (b.length > 10 && b.toString('ascii', 0, 3) === 'GIF') {
+      return { w: b.readUInt16LE(6), h: b.readUInt16LE(8) };
+    }
+    if (b[0] === 0xff && b[1] === 0xd8) {
+      let i = 2;
+      while (i + 9 < b.length) {
+        if (b[i] !== 0xff) { i += 1; continue; }
+        const marker = b[i + 1];
+        const len = b.readUInt16BE(i + 2);
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+          return { w: b.readUInt16BE(i + 7), h: b.readUInt16BE(i + 5) };
+        }
+        i += 2 + len;
+      }
+    }
+  } catch { /* unknown format */ }
+  return null;
+}
+
+/**
+ * Decide which letterhead a bill prints with. One rule, shared by the PDF and
+ * by GET /api/bills/:id (so the in-app preview and the printout always match):
+ *   1. the template picked on the bill (or an explicit override)
+ *   2. the clinic's default receipt template
+ *   3. the doctor's prescription-pad header/footer
+ *   4. plain clinic name/address text
+ */
+async function resolveBillLetterhead(db, bill, overrideTemplateId = null) {
+  const soft = async (sql, params) => {
+    try { const [rows] = await db.execute(sql, params); return rows; } catch { return []; }
+  };
+  const shape = (row, source) => {
+    if (!row || !(row.header_image || row.header_content || row.footer_image || row.footer_content)) return null;
+    return {
+      source,
+      template_id: row.id ?? null,
+      template_name: row.template_name ?? null,
+      header_image: toImgSrc(row.header_image),
+      header_content: row.header_content || null,
+      footer_image: toImgSrc(row.footer_image),
+      footer_content: row.footer_content || null,
+    };
+  };
+  const cols = 'id, template_name, header_image, header_content, footer_image, footer_content';
+
+  const explicitId = overrideTemplateId || bill.template_id;
+  if (explicitId) {
+    const rows = await soft(`SELECT ${cols} FROM receipt_templates WHERE id = ? LIMIT 1`, [explicitId]);
+    const lh = shape(rows[0], 'template');
+    if (lh) return lh;
+  }
+
+  const defaults = await soft(
+    `SELECT ${cols} FROM receipt_templates
+      WHERE is_default = 1 AND (clinic_id = ? OR clinic_id IS NULL)
+      ORDER BY (clinic_id IS NULL) ASC, created_at DESC, id DESC LIMIT 1`,
+    [bill.clinic_id ?? null],
+  );
+  const defaultLh = shape(defaults[0], 'default_template');
+  if (defaultLh) return defaultLh;
+
+  if (bill.doctor_id) {
+    const pad = await soft(
+      `SELECT pc.header_image, pc.footer_image
+         FROM pad_configurations pc JOIN doctors d ON d.user_id = pc.doctor_id
+        WHERE d.id = ? LIMIT 1`,
+      [bill.doctor_id],
+    );
+    const padLh = shape(pad[0], 'pad');
+    if (padLh) return padLh;
+  }
+
+  return {
+    source: 'clinic', template_id: null, template_name: null,
+    header_image: null, header_content: null, footer_image: null, footer_content: null,
+  };
+}
+
+// Receipts and certificates are one-sheet documents. When the content spills
+// just past the page (long template text, tall letterhead art) shrink it to
+// fit ONE sheet instead of printing a near-empty second page. Genuinely long
+// content still flows onto more pages once it would need < minScale.
+async function fitToOnePageScale(page, { marginTopMm, marginBottomMm, minScale = 0.65 }) {
+  await page.evaluate(() => Promise.all(Array.from(document.images).map((img) => (
+    img.complete ? null : new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; })
+  ))));
+  const contentPx = await page.evaluate(() => Math.ceil(document.body.getBoundingClientRect().bottom));
+  const availablePx = ((297 - marginTopMm - marginBottomMm) * 96) / 25.4;
+  if (contentPx <= availablePx) return 1;
+  return Math.max(minScale, Math.floor((availablePx / contentPx) * 100) / 100);
+}
+
+// Doctor's Clinical > Rx Template print layout (margins + blank band for
+// pre-printed stationery), stored per USER id. Null when nothing is saved.
+async function loadPrintLayout(db, doctorUserId) {
+  if (!doctorUserId) return null;
+  try {
+    const [rows] = await db.execute(
+      `SELECT content FROM rx_template_config
+        WHERE doctor_id = ? AND template_type = 'print_layout' AND is_active = 1
+        ORDER BY is_default DESC, id DESC LIMIT 1`,
+      [doctorUserId],
+    );
+    if (!rows.length || !rows[0].content) return null;
+    const parsed = typeof rows[0].content === 'string' ? JSON.parse(rows[0].content) : rows[0].content;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Letterhead + signing doctor for a medical certificate — "same as the
+ * prescription pad". Used by both GET /api/medical-certificates/:id (preview)
+ * and the certificate PDF so the two always match. Order:
+ *   1. header/footer images uploaded on the certificate itself
+ *   2. the doctor's prescription-pad letterhead
+ *   3. the clinic's default letterhead template
+ *   4. plain clinic name/address text
+ */
+async function resolveCertificateLetterhead(db, cert) {
+  const soft = async (sql, params) => {
+    try { const [rows] = await db.execute(sql, params); return rows; } catch { return []; }
+  };
+
+  // Certificates store the doctor by NAME (no doctor_id). Match it to a doctor
+  // account; fall back to whoever created the certificate.
+  const bareName = String(cert.doctor_name || '').replace(/^\s*dr\.?\s*/i, '').trim();
+  let doctor = null;
+  if (bareName) {
+    const rows = await soft(
+      `SELECT u.id AS user_id, d.signature_image, d.qualification, d.license_number, d.medical_council
+         FROM doctors d JOIN users u ON u.id = d.user_id
+        WHERE LOWER(TRIM(u.name)) IN (LOWER(?), LOWER(?))
+        ORDER BY (d.clinic_id <=> ?) DESC, d.id ASC LIMIT 1`,
+      [bareName, `Dr. ${bareName}`, cert.clinic_id ?? null],
+    );
+    doctor = rows[0] || null;
+  }
+  if (!doctor && cert.created_by) {
+    const rows = await soft(
+      `SELECT u.id AS user_id, d.signature_image, d.qualification, d.license_number, d.medical_council
+         FROM users u LEFT JOIN doctors d ON d.user_id = u.id
+        WHERE u.id = ? LIMIT 1`,
+      [cert.created_by],
+    );
+    doctor = rows[0] || null;
+  }
+
+  const base = {
+    doctor_user_id: doctor?.user_id ?? null,
+    signature_image: toImgSrc(doctor?.signature_image),
+    doctor_license_number: doctor?.license_number || null,
+    doctor_medical_council: doctor?.medical_council || null,
+  };
+  const none = { header_image: null, header_content: null, footer_image: null, footer_content: null, template_name: null };
+
+  if (cert.header_image || cert.footer_image) {
+    return { ...base, ...none, source: 'certificate',
+      header_image: toImgSrc(cert.header_image), footer_image: toImgSrc(cert.footer_image) };
+  }
+
+  if (doctor?.user_id) {
+    const pad = await soft('SELECT header_image, footer_image FROM pad_configurations WHERE doctor_id = ? LIMIT 1', [doctor.user_id]);
+    if (pad[0] && (pad[0].header_image || pad[0].footer_image)) {
+      return { ...base, ...none, source: 'pad',
+        header_image: toImgSrc(pad[0].header_image), footer_image: toImgSrc(pad[0].footer_image) };
+    }
+  }
+
+  const tpl = await soft(
+    `SELECT template_name, header_image, header_content, footer_image, footer_content FROM receipt_templates
+      WHERE is_default = 1 AND (clinic_id = ? OR clinic_id IS NULL)
+      ORDER BY (clinic_id IS NULL) ASC, created_at DESC, id DESC LIMIT 1`,
+    [cert.clinic_id ?? null],
+  );
+  if (tpl[0] && (tpl[0].header_image || tpl[0].header_content || tpl[0].footer_image || tpl[0].footer_content)) {
+    return { ...base, source: 'default_template', template_name: tpl[0].template_name,
+      header_image: toImgSrc(tpl[0].header_image), header_content: tpl[0].header_content || null,
+      footer_image: toImgSrc(tpl[0].footer_image), footer_content: tpl[0].footer_content || null };
+  }
+
+  return { ...base, ...none, source: 'clinic' };
+}
+
+async function generateBillingPDF({ billId, withLetterhead = false, templateId = null }) {
+  const db = getDb();
+
+  const [bills] = await db.execute(`
+      SELECT b.*,
+        pa.name as patient_name, pa.patient_id as patient_uhid,
+        pa.phone as patient_phone, pa.email as patient_email,
+        pa.gender as patient_gender, pa.age_years as patient_age,
+        u.name as doctor_name, d.specialization as doctor_specialization, d.user_id as doctor_user_id,
+        c.name as clinic_name, c.address as clinic_address,
+        c.city as clinic_city, c.phone as clinic_phone
+      FROM bills b
+      LEFT JOIN patients pa ON b.patient_id = pa.id
+      LEFT JOIN doctors d ON b.doctor_id = d.id
+      LEFT JOIN users u ON d.user_id = u.id
+      LEFT JOIN clinics c ON b.clinic_id = c.id
+      WHERE b.id = ?
+    `, [billId]);
+
+  if (bills.length === 0) {
+    throw ApiError.notFound('Bill');
+  }
+  const bill = bills[0];
+
+  const [items] = await db.execute(
+    'SELECT service_name, quantity, unit_price, discount_amount, total_price FROM bill_items WHERE bill_id = ? ORDER BY sort_order, id',
+    [billId],
+  );
+
+  const letterhead = withLetterhead ? await resolveBillLetterhead(db, bill, templateId) : null;
+
+  // Same stationery as the prescription: reuse the doctor's Clinical > Rx
+  // Template print layout so "without letterhead" clears the pre-printed
+  // header on their paper exactly like the Rx does.
+  let printLayout = null;
+  try {
+    if (bill.doctor_user_id) {
+      const [layoutRows] = await db.execute(
+        `SELECT content FROM rx_template_config
+          WHERE doctor_id = ? AND template_type = 'print_layout' AND is_active = 1
+          ORDER BY is_default DESC, id DESC LIMIT 1`,
+        [bill.doctor_user_id],
+      );
+      if (layoutRows.length > 0 && layoutRows[0].content) {
+        const parsed = typeof layoutRows[0].content === 'string' ? JSON.parse(layoutRows[0].content) : layoutRows[0].content;
+        if (parsed && typeof parsed === 'object') printLayout = parsed;
+      }
+    }
+  } catch { /* layout is optional */ }
+
+  const layoutMm = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 && n <= 200 ? n : fallback;
+  };
+  const padLeftMm = layoutMm(printLayout?.left, 12);
+  const padRightMm = layoutMm(printLayout?.right, 12);
+  // The blank bands (Rx layout top/contentTop, bottom/contentBottom) exist to
+  // clear the header/footer PRE-PRINTED on the clinic's stationery — so they
+  // apply to plain paper only. With a letterhead we draw that header/footer
+  // ourselves; reserving the band as well pushed a one-page receipt onto a
+  // second sheet.
+  const topBandMm = withLetterhead
+    ? 10
+    : (printLayout ? layoutMm(printLayout.top, 10) + layoutMm(printLayout.contentTop, 0) : BLANK_LETTERHEAD_MM);
+  const bottomBandMm = withLetterhead
+    ? 0
+    : (printLayout ? layoutMm(printLayout.bottom, 10) + layoutMm(printLayout.contentBottom, 0) : 0);
+
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const money = (v) => `&#8377;${(parseFloat(v) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const displayItems = items.length > 0
+    ? items
+    : [{ service_name: 'Consultation', quantity: 1, unit_price: bill.total_amount, discount_amount: 0, total_price: bill.total_amount }];
+
+  const totalAmt = parseFloat(bill.total_amount) || 0;
+  const itemsSum = displayItems.reduce((s, it) => s + (parseFloat(it.total_price) || 0), 0);
+  const subtotal = parseFloat(bill.subtotal) || itemsSum || totalAmt;
+  const discountAmt = parseFloat(bill.discount_amount) || 0;
+  const taxAmt = parseFloat(bill.tax_amount) || 0;
+  const paidAmt = parseFloat(bill.amount_paid) || 0;
+  const balanceAmt = bill.balance_due != null ? (parseFloat(bill.balance_due) || 0) : Math.max(0, totalAmt - paidAmt);
+  const status = String(bill.payment_status || 'pending').toLowerCase();
+  const statusLabel = { paid: 'PAID', completed: 'PAID', partial: 'PARTIALLY PAID', pending: 'PENDING', cancelled: 'CANCELLED', refunded: 'REFUNDED' }[status] || status.toUpperCase();
+  const statusColor = ['paid', 'completed'].includes(status) ? '#15803d' : status === 'partial' ? '#1d4ed8' : ['cancelled', 'refunded'].includes(status) ? '#b91c1c' : '#c2410c';
+
+  const receiptNo = `REC${String(bill.id).padStart(4, '0')}`;
+  const billDate = new Date(bill.bill_date || bill.created_at || Date.now())
+    .toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' });
+  const ageGender = [bill.patient_age ? `${bill.patient_age} Yrs` : '', bill.patient_gender || ''].filter(Boolean).join(' / ');
+  const paymentMethod = String(bill.payment_method || 'cash').replace('+', ' + ').toUpperCase();
+
+  // ── Header / footer ────────────────────────────────────────────────────────
+  let headerHTML = '';
+  let footerImgHTML = '';
+  let footerContentHTML = '';
+  if (withLetterhead && letterhead) {
+    if (letterhead.header_image) {
+      headerHTML += `<div class="lh-img"><img src="${letterhead.header_image}"/></div>`;
+    }
+    if (letterhead.header_content) {
+      headerHTML += `<div class="lh-content">${safeTemplateHtml(letterhead.header_content)}</div>`;
+    }
+    if (!letterhead.header_image && !letterhead.header_content) {
+      const addr = [bill.clinic_address, bill.clinic_city].filter(Boolean).join(', ');
+      headerHTML = `<div class="clinic-text">
+          <div class="clinic-name">${esc(bill.clinic_name || 'Clinic')}</div>
+          ${addr || bill.clinic_phone ? `<div class="clinic-sub">${esc(addr)}${addr && bill.clinic_phone ? ' &nbsp;|&nbsp; ' : ''}${bill.clinic_phone ? 'Ph: ' + esc(bill.clinic_phone) : ''}</div>` : ''}
+        </div>`;
+    }
+    headerHTML += '<div class="header-rule"></div>';
+    if (letterhead.footer_content) {
+      footerContentHTML = `<div class="footer-content">${safeTemplateHtml(letterhead.footer_content)}</div>`;
+    }
+    if (letterhead.footer_image) {
+      // Rendered through Chrome's own per-page footer (see page.pdf below).
+      footerImgHTML = letterhead.footer_image;
+    }
+  }
+
+  const rowsHTML = displayItems.map((it, i) => `
+    <tr>
+      <td class="c">${i + 1}</td>
+      <td>${esc(it.service_name || 'Service')}</td>
+      <td class="c">${esc(String(parseFloat(it.quantity) || 1))}</td>
+      <td class="r">${money(it.unit_price)}</td>
+      <td class="r">${(parseFloat(it.discount_amount) || 0) > 0 ? money(it.discount_amount) : '&mdash;'}</td>
+      <td class="r">${money(it.total_price)}</td>
+    </tr>`).join('');
+
+  const totalsHTML = [
+    (subtotal !== totalAmt || discountAmt > 0 || taxAmt > 0) ? `<tr><td>Sub Total</td><td class="r">${money(subtotal)}</td></tr>` : '',
+    discountAmt > 0 ? `<tr><td>Discount</td><td class="r">- ${money(discountAmt)}</td></tr>` : '',
+    taxAmt > 0 ? `<tr><td>Tax</td><td class="r">${money(taxAmt)}</td></tr>` : '',
+    `<tr class="net"><td>Net Amount</td><td class="r">${money(totalAmt)}</td></tr>`,
+    paidAmt > 0 ? `<tr><td>Amount Paid</td><td class="r paid">${money(paidAmt)}</td></tr>` : '',
+    balanceAmt > 0 && !['cancelled', 'refunded'].includes(status) ? `<tr><td>Balance Due</td><td class="r due">${money(balanceAmt)}</td></tr>` : '',
+  ].join('');
+
+  // Receipts saved before the template fix had the template's footer/header
+  // text copied into Notes/Remarks — skip those so it doesn't print twice.
+  const plain = (v) => String(v || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const templateTexts = new Set([plain(letterhead?.footer_content), plain(letterhead?.header_content)].filter(Boolean));
+  const showNote = (v) => v && !templateTexts.has(plain(v));
+  const remarksHTML = [
+    showNote(bill.notes) ? `<div class="note"><strong>Notes:</strong> ${esc(bill.notes)}</div>` : '',
+    showNote(bill.remarks) ? `<div class="note"><strong>Remarks:</strong> ${esc(bill.remarks)}</div>` : '',
+  ].join('');
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:Arial,'Helvetica Neue','Noto Sans','DejaVu Sans',sans-serif;font-size:9.5pt;color:#111;padding:10mm ${padRightMm}mm 10mm ${padLeftMm}mm}
+  .lh-img{margin:-10mm -${padRightMm}mm 2mm -${padLeftMm}mm}
+  .lh-img img{width:100%;display:block}
+  .lh-content{font-size:9pt;color:#374151;margin-bottom:2mm}
+  .clinic-text{text-align:center;margin-bottom:2mm}
+  .clinic-name{font-size:15pt;font-weight:700;color:#003366}
+  .clinic-sub{font-size:8.5pt;color:#555;margin-top:1mm}
+  .header-rule{border-top:1.5px solid #003366;margin:1mm 0 4mm}
+  .title-row{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:3mm}
+  .title{font-size:14pt;font-weight:700;letter-spacing:1.5pt;color:#003366}
+  .meta{text-align:right;font-size:9pt;line-height:1.5}
+  .meta b{color:#003366}
+  .party{display:flex;justify-content:space-between;gap:6mm;padding:3mm 4mm;background:#f0f4ff;border-radius:2mm;margin-bottom:4mm}
+  .party .lbl{font-size:7.5pt;color:#64748b;text-transform:uppercase;letter-spacing:.5pt}
+  .party .name{font-size:10.5pt;font-weight:700;text-transform:uppercase}
+  .party .sub{font-size:8.5pt;color:#475569;margin-top:.5mm}
+  table.items{width:100%;border-collapse:collapse;margin-bottom:4mm}
+  table.items th{background:#003366;color:#fff;font-size:8.5pt;padding:2.2mm 2.5mm;text-align:left}
+  table.items td{font-size:9pt;padding:2.2mm 2.5mm;border-bottom:1px solid #e2e8f0}
+  table.items tr:nth-child(even) td{background:#f8fafc}
+  .c{text-align:center!important}.r{text-align:right!important}
+  .bottom{display:flex;justify-content:space-between;align-items:flex-start;gap:8mm}
+  .pay{font-size:9pt;line-height:1.8}
+  .badge{display:inline-block;padding:.6mm 2.5mm;border-radius:10mm;font-size:8pt;font-weight:700;color:#fff;background:${statusColor}}
+  table.totals{min-width:70mm;border-collapse:collapse}
+  table.totals td{padding:1.2mm 0;font-size:9.5pt}
+  table.totals td.r{padding-left:10mm}
+  table.totals tr.net td{border-top:1.5px solid #111;font-size:12pt;font-weight:700;padding-top:2mm}
+  .paid{color:#15803d}.due{color:#b91c1c;font-weight:700}
+  .note{font-size:8.5pt;color:#374151;margin-top:3mm}
+  .footer-content{margin-top:6mm;padding-top:3mm;border-top:1px solid #e2e8f0;text-align:center;font-size:9pt;color:#475569}
+  .thanks{margin-top:6mm;text-align:center;font-size:8pt;color:#94a3b8}
+</style></head><body>
+${headerHTML}
+<div class="title-row">
+  <div class="title">RECEIPT</div>
+  <div class="meta"><div><b>Receipt #:</b> ${esc(receiptNo)}</div><div><b>Date:</b> ${esc(billDate)}</div></div>
+</div>
+<div class="party">
+  <div>
+    <div class="lbl">Bill To</div>
+    <div class="name">${esc(bill.patient_name || 'N/A')}</div>
+    <div class="sub">${[bill.patient_uhid ? 'UHID: ' + esc(bill.patient_uhid) : '', esc(ageGender), bill.patient_phone ? 'Ph: ' + esc(bill.patient_phone) : ''].filter(Boolean).join(' &nbsp;|&nbsp; ')}</div>
+  </div>
+  ${bill.doctor_name ? `<div style="text-align:right">
+    <div class="lbl">Consultant</div>
+    <div class="name" style="text-transform:none">Dr. ${esc(bill.doctor_name)}</div>
+    ${bill.doctor_specialization ? `<div class="sub">${esc(bill.doctor_specialization)}</div>` : ''}
+  </div>` : ''}
+</div>
+<table class="items">
+  <thead><tr><th class="c" style="width:7%">#</th><th>Service</th><th class="c" style="width:8%">Qty</th><th class="r" style="width:16%">Rate</th><th class="r" style="width:13%">Disc.</th><th class="r" style="width:17%">Amount</th></tr></thead>
+  <tbody>${rowsHTML}</tbody>
+</table>
+<div class="bottom">
+  <div class="pay">
+    <div><strong>Payment Mode:</strong> ${esc(paymentMethod)}</div>
+    ${bill.payment_reference ? `<div><strong>Ref:</strong> ${esc(bill.payment_reference)}</div>` : ''}
+    <div><strong>Status:</strong> <span class="badge">${esc(statusLabel)}</span></div>
+  </div>
+  <table class="totals">${totalsHTML}</table>
+</div>
+${remarksHTML}
+${footerContentHTML || (withLetterhead ? '<div class="thanks">This is a computer generated receipt.</div>' : '')}
+</body></html>`;
+
+  let browser;
+  try {
+    const launchOpts = {
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    };
+    try { launchOpts.executablePath = puppeteer.executablePath(); } catch { /* use default */ }
+    browser = await puppeteer.launch(launchOpts);
+    const page = await browser.newPage();
+    await page.setViewport({ width: 794, height: 1123 }); // A4 @ 96dpi, so measuring matches print
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    const hasFooterImg = Boolean(footerImgHTML);
+    // Footer image height on an A4-wide page, capped so a tall image can't eat
+    // the whole sheet. Unknown formats fall back to a typical banner height.
+    const footerSize = hasFooterImg ? imageSizeFromDataUrl(footerImgHTML) : null;
+    const footerMm = hasFooterImg
+      ? Math.min(40, footerSize && footerSize.w > 0 ? (210 * footerSize.h) / footerSize.w : 25)
+      : 0;
+    const marginTopMm = Math.max(0, topBandMm - 10);
+    const marginBottomMm = Math.max(hasFooterImg ? footerMm : 10, bottomBandMm);
+    const scale = await fitToOnePageScale(page, { marginTopMm, marginBottomMm });
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      scale,
+      displayHeaderFooter: true,
+      headerTemplate: '<div></div>',
+      footerTemplate: hasFooterImg
+        ? `<div style="width:100%;margin:0;padding:0;-webkit-print-color-adjust:exact"><img src="${footerImgHTML}" style="width:100%;height:${footerMm.toFixed(2)}mm;display:block;object-fit:fill"/></div>`
+        : '<div style="width:100%;font-size:7pt;color:#999;text-align:center;font-family:Arial,sans-serif;padding:0 10mm">Generated by Dr Jaju Care &nbsp;&bull;&nbsp; Page <span class="pageNumber"></span> / <span class="totalPages"></span></div>',
+      margin: {
+        // Plain paper: keep the pre-printed header band clear (body padding
+        // supplies 10mm of it).
+        top: `${marginTopMm.toFixed(2)}mm`,
+        right: '0',
+        bottom: `${marginBottomMm.toFixed(2)}mm`,
+        left: '0',
+      },
+    });
+    return {
+      buffer: Buffer.from(pdfBuffer),
+      filename: `receipt_${receiptNo}.pdf`,
+      contentType: 'application/pdf',
+    };
+  } catch (err) {
+    console.warn('Receipt HTML render failed, falling back to basic PDF:', err.message);
+    return generateBillingPDFLegacy({ billId, withLetterhead });
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+// Previous jsPDF renderer — kept only as a fallback if headless Chrome is
+// unavailable, so a receipt can always be produced.
+async function generateBillingPDFLegacy({ billId, withLetterhead = false }) {
   const db = getDb();
 
   const [bills] = await db.execute(`
@@ -1492,6 +1997,12 @@ module.exports = {
   BLANK_LETTERHEAD_MM,
   generatePrescriptionPDF,
   generateBillingPDF,
+  resolveBillLetterhead,
+  resolveCertificateLetterhead,
+  loadPrintLayout,
+  fitToOnePageScale,
+  imageSizeFromDataUrl,
+  safeTemplateHtml,
   generateCertificatePDF,
   generateReferralPDF,
   generateLabReportPDF,

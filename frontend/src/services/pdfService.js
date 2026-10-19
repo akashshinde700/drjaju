@@ -83,11 +83,36 @@ export const downloadBillingPDF = (billId, { withLetterhead = false } = {}) => {
  * Download medical certificate as PDF
  * @param {number} certificateId - ID of certificate
  */
-export const downloadCertificatePDF = (certificateId) => {
+export const downloadCertificatePDF = (certificateId, { withLetterhead = true } = {}) => {
   return downloadPDF(
-    `certificate/${certificateId}`,
+    `certificate/${certificateId}?with_letterhead=${withLetterhead ? '1' : '0'}`,
     `certificate_${certificateId}.pdf`
   );
+};
+
+/**
+ * Open a medical certificate PDF in a new tab (to print). The certificate route
+ * needs the auth header, so the tab is opened synchronously from the click
+ * (keeps popup blockers happy) and pointed at the fetched PDF afterwards.
+ */
+export const openCertificatePDF = async (certificateId, { withLetterhead = true } = {}) => {
+  const win = window.open('', '_blank');
+  try {
+    const token = localStorage.getItem('token');
+    const apiUrl = import.meta.env.VITE_API_URL || '';
+    const response = await fetch(
+      `${apiUrl}/api/pdf/certificate/${certificateId}?with_letterhead=${withLetterhead ? '1' : '0'}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!response.ok) throw new Error(`Failed to load PDF: ${response.statusText}`);
+    const url = window.URL.createObjectURL(await response.blob());
+    if (win) win.location.href = url;
+    else window.open(url, '_blank');
+    return true;
+  } catch (error) {
+    if (win) win.close();
+    throw error;
+  }
 };
 
 /**

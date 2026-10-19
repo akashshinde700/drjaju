@@ -199,7 +199,16 @@ class MedicalCertificateService {
       throw ApiError.notFound('Medical certificate');
     }
 
-    return { certificate: rows[0] };
+    const certificate = rows[0];
+    // Same letterhead the PDF will print (certificate images → doctor's
+    // prescription-pad letterhead → clinic default template → clinic text).
+    try {
+      // Required lazily: PdfGeneratorService pulls in puppeteer.
+      const { resolveCertificateLetterhead } = require('./PdfGeneratorService');
+      certificate.letterhead = await resolveCertificateLetterhead(db, certificate);
+    } catch (_e) { /* letterhead is optional */ }
+
+    return { certificate };
   }
 
   static async createMedicalCertificate({ body, user }) {
