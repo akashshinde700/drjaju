@@ -369,6 +369,7 @@ export default function PatientOverview() {
       }
 
       const response = await api.post(`/api/patient-data/records/${id}`, formData, {
+        timeout: 120000,
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -379,7 +380,7 @@ export default function PatientOverview() {
       if (ocr?.extracted && ocr?.count > 0) {
         setExtractionStatus(ocr);
         setShowExtractionModal(true);
-        addToast(`✓ ${ocr.count} lab values auto-extracted from report!`, 'success');
+        addToast(`✓ ${ocr.count} lab values extracted. Verify each value against the original report.`, 'success');
       } else if (ocr?.extracted === false && ocr?.error) {
         // OCR ran but failed or found nothing
         addToast(

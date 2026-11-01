@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
        host: true, // 👈 ADD THIS
-    allowedHosts: ['drjaju.com', '72.60.206.56', 'localhost'], // 👈 ADD THIS
+    allowedHosts: ['drjaju.com', '72.60.206.56', 'localhost', '.e2b.app'], // 👈 ADD THIS
     proxy: {
       '/api': {
         target: 'http://localhost:5000',
@@ -22,7 +22,7 @@ export default defineConfig({
   },
     preview: { // 👈 ALSO ADD THIS (important for build preview)
     host: true,
-    allowedHosts: ['drjaju.com', '72.60.206.56', 'localhost','www.drjaju.com']
+    allowedHosts: ['drjaju.com', '72.60.206.56', 'localhost', '.e2b.app','www.drjaju.com']
   },
   test: {
     environment: 'jsdom',

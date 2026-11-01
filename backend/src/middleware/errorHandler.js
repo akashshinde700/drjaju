@@ -30,6 +30,13 @@ function errorHandler(err, req, res, next) { // eslint-disable-line no-unused-va
     logger.critical('Database connection error', err, errorContext);
   }
 
+  if (err.name === 'MulterError') {
+    return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({
+      success: false,
+      error: err.code === 'LIMIT_FILE_SIZE' ? 'File is too large. Maximum upload size is 10 MB.' : 'Please upload one supported file at a time.'
+    });
+  }
+
   // Handle custom ApiError class
   if (err.constructor.name === 'ApiError' || err.statusCode) {
     const response = {

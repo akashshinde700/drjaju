@@ -10,7 +10,9 @@ const sharp = require('sharp');
 async function preprocessImageForOCR(imagePath) {
   try {
     const outputPath = imagePath + '_ocr_prep.png';
-    await sharp(imagePath)
+    await sharp(imagePath, { limitInputPixels: 40000000 })
+      .rotate()
+      .resize({ width: 3000, height: 4000, fit: 'inside', withoutEnlargement: true })
       .grayscale()
       .normalize()          // auto contrast stretch
       .sharpen({ sigma: 1.5 })
@@ -23,80 +25,55 @@ async function preprocessImageForOCR(imagePath) {
   }
 }
 
-/**
- * Convert first page of PDF to PNG image using puppeteer
- */
-async function pdfToImagePath(pdfPath) {
-  const puppeteer = require('puppeteer');
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
-    });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1400, height: 2000 });
-    const absolutePath = path.resolve(pdfPath);
-    await page.goto(`file://${absolutePath}`, { waitUntil: 'load', timeout: 30000 });
-    // Give extra time for PDF renderer
-    await new Promise(r => setTimeout(r, 1500));
-    const imagePath = pdfPath + '_pdf_page.png';
-    await page.screenshot({ path: imagePath, type: 'png', fullPage: true });
-    return imagePath;
-  } finally {
-    if (browser) await browser.close();
-  }
-}
-
-/**
- * Extract text from image or PDF medical report
- */
+// Render PDFs directly: browser PDF viewers can produce blank screenshots and
+// only captured page one. Bound page count and raster size for untrusted uploads.
 async function extractTextFromReport(filePath) {
   const tempFiles = [];
-  let processedPath = filePath;
-
+  let worker;
+  let timer;
+  let pdf;
+  let loadingTask;
   try {
-    const ext = path.extname(filePath).toLowerCase();
-
-    // Step 1: Convert PDF → PNG image
-    if (ext === '.pdf') {
-      const imgPath = await pdfToImagePath(filePath);
-      tempFiles.push(imgPath);
-      processedPath = imgPath;
-    }
-
-    // Step 2: Preprocess image for better OCR (grayscale + contrast)
-    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
-    const procExt = path.extname(processedPath).toLowerCase();
-    if (imageExts.includes(procExt)) {
-      const prep = await preprocessImageForOCR(processedPath);
-      if (prep !== processedPath) {
-        tempFiles.push(prep);
-        processedPath = prep;
-      }
-    }
-
-    // Step 3: Run Tesseract OCR (60s timeout)
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('OCR timeout (60s)')), 60000)
-    );
-
-    const ocrPromise = Tesseract.recognize(processedPath, 'eng', {
-      logger: m => {
-        if (m.status === 'recognizing text') {
-          process.stdout.write(`\rOCR: ${(m.progress * 100).toFixed(0)}%`);
-        }
-      }
+    worker = await Tesseract.createWorker('eng', 1, {
+      langPath: path.resolve(__dirname, '../..'),
+      gzip: false,
+      cachePath: path.resolve(__dirname, '../..'),
     });
-
-    const result = await Promise.race([ocrPromise, timeoutPromise]);
-    return result.data.text;
-
+    const run = async () => {
+      if (path.extname(filePath).toLowerCase() === '.pdf') {
+        const { DOMMatrix, ImageData, Path2D, createCanvas } = require('@napi-rs/canvas');
+        Object.assign(globalThis, { DOMMatrix, ImageData, Path2D });
+        const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        loadingTask = getDocument({ data: new Uint8Array(await fs.readFile(filePath)),
+          isEvalSupported: false, useSystemFonts: true });
+        pdf = await loadingTask.promise;
+        if (pdf.numPages > 20) throw new Error('Please upload a PDF with 20 pages or fewer.');
+        const texts = [];
+        for (let n = 1; n <= pdf.numPages; n++) {
+          const page = await pdf.getPage(n);
+          const content = await page.getTextContent();
+          const text = content.items.map(item => item.str + (item.hasEOL ? '\n' : ' ')).join('');
+          if (text.trim().length >= 30) { texts.push(text); continue; }
+          const base = page.getViewport({ scale: 1 });
+          const viewport = page.getViewport({ scale: Math.min(2, 2500 / Math.max(base.width, base.height)) });
+          const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+          texts.push((await worker.recognize(canvas.toBuffer('image/png'))).data.text);
+        }
+        return texts.join('\n');
+      }
+      const prep = await preprocessImageForOCR(filePath);
+      if (prep !== filePath) tempFiles.push(prep);
+      return (await worker.recognize(prep)).data.text;
+    };
+    return await Promise.race([run(), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('OCR timed out. Please upload a smaller, clearer report.')), 60000);
+    })]);
   } finally {
-    // Cleanup temp files
-    for (const f of tempFiles) {
-      try { await fs.unlink(f); } catch {}
-    }
+    clearTimeout(timer);
+    if (worker) await worker.terminate();
+    if (loadingTask) await loadingTask.destroy();
+    for (const f of tempFiles) { try { await fs.unlink(f); } catch {} }
   }
 }
 
@@ -122,14 +99,15 @@ function parseLabData(text) {
    */
   function parseIndianNumber(str) {
     const cleaned = str.replace(/,/g, '');
-    const n = parseFloat(cleaned);
+    if (!/^\d+(?:\.\d+)?$/.test(cleaned)) return null;
+    const n = Number(cleaned);
     return isNaN(n) ? null : n;
   }
 
   /**
    * Test name blacklist — skip header/footer lines
    */
-  const skipWords = /^(test|investigation|result|value|unit|reference|range|normal|method|remark|report|date|patient|doctor|lab|page|sample|collected|reported|printed|name|age|sex|gender|ref\.?\s*interval|bio\.?\s*ref)/i;
+  const skipWords = /^(test|investigation|result|value|unit|reference|range|normal|method|remark|report|date|patient|doctor|lab|page|sample|collected|reported|printed|name|age|sex|gender|ref\.?\s*interval|bio\.?\s*ref)\b/i;
 
   const patterns = [
     // Pipe-separated: "Hemoglobin | 14.2 | g/dL | 13.0 - 17.0"
@@ -140,6 +118,9 @@ function parseLabData(text) {
 
     // Tab or multi-space: "Hemoglobin    14.2    g/dL    13.0-17.0"
     /^([A-Za-z][A-Za-z0-9\s%#/(). -]{2,45}?)\s{2,}([0-9][0-9,.]*)\s+([a-zA-Z0-9/%^µ·]+)\s*(.*)?$/,
+
+    // OCR and embedded PDF text commonly collapse columns to single spaces.
+    /^([A-Za-z][A-Za-z0-9\s%#/(). -]{2,45}?)\s+([0-9][0-9,.]*)\s+([a-zA-Z/%µ][a-zA-Z0-9/%^µ·]*)\s*(.*)?$/,
 
     // Simple 2-column: "Hemoglobin  14.2" (no unit)
     /^([A-Za-z][A-Za-z0-9\s%#/(). -]{2,45}?)\s{2,}([0-9][0-9,. ]+)\s*$/,
@@ -182,25 +163,13 @@ function parseLabData(text) {
 async function findMatchingLabTest(extractedTest, labTemplates) {
   if (!labTemplates || labTemplates.length === 0) return null;
 
-  const q = extractedTest.testName.toLowerCase();
-
-  // Exact match
-  for (const t of labTemplates) {
-    if (t.test_name.toLowerCase() === q) return t;
-  }
-
-  // Contains match
-  for (const t of labTemplates) {
-    const tl = t.test_name.toLowerCase();
-    if (tl.includes(q) || q.includes(tl)) return t;
-  }
-
-  // Keyword match (at least one significant word)
-  const keywords = q.split(/\s+/).filter(w => w.length >= 3);
-  for (const t of labTemplates) {
-    const tl = t.test_name.toLowerCase();
-    if (keywords.some(kw => tl.includes(kw))) return t;
-  }
+  // Never infer clinical equivalence from one shared word (e.g. total
+  // bilirubin vs direct bilirubin). Uncertain names remain unmatched for review.
+  const normalize = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const q = normalize(extractedTest?.testName);
+  if (!q) return null;
+  const matches = labTemplates.filter(t => normalize(t.test_name) === q);
+  if (matches.length === 1) return matches[0];
 
   return null;
 }
@@ -255,7 +224,6 @@ async function processLabReportImage(filePath, labTemplates) {
     }
 
     const highCount = matchedResults.filter(r => r.confidence === 'high').length;
-    const unmatchedCount = matchedResults.filter(r => r.confidence === 'unmatched').length;
     return {
       success: true,
       extractedCount: extractedLabData.length,
