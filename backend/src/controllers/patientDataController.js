@@ -29,11 +29,11 @@ const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
 
   if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-    return cb(new Error(`Invalid file type. Allowed types: ${ALLOWED_EXTENSIONS.join(', ')}`), false);
+    return cb(Object.assign(new Error(`Invalid file type. Allowed types: ${ALLOWED_EXTENSIONS.join(', ')}`), { status: 400 }), false);
   }
 
   if (!ALLOWED_EXTENSIONS.includes(ext)) {
-    return cb(new Error(`Invalid file extension. Allowed extensions: ${ALLOWED_EXTENSIONS.join(', ')}`), false);
+    return cb(Object.assign(new Error(`Invalid file extension. Allowed extensions: ${ALLOWED_EXTENSIONS.join(', ')}`), { status: 400 }), false);
   }
 
   cb(null, true);
@@ -135,6 +135,10 @@ async function addRecord(req, res) {
     const { patientId } = req.params;
     const { name, category, description, date } = req.body;
     const file = req.file;
+    if (!/^\d+$/.test(String(patientId)) || Number(patientId) < 1 || typeof name !== 'string' || !name.trim() || name.trim().length > 255) {
+      if (file?.path) await fs.unlink(file.path).catch(() => {});
+      return res.status(400).json({ error: 'A valid patient and record name (1–255 characters) are required.' });
+    }
     const db = getDb();
 
     // Resolve clinic_id from user or default
@@ -180,31 +184,10 @@ async function addRecord(req, res) {
           for (const result of ocrResult.results) {
             if (!result?.test_name || result.reading === undefined || result.reading === null) continue;
 
-            let finalTestName = result.test_name;
-            let finalUnit = result.unit || null;
-            let finalReferenceRange = result.reference_range || null;
+            const finalTestName = result.test_name;
+            const finalUnit = result.unit || null;
+            const finalReferenceRange = result.reference_range || null;
 
-            if (result.confidence === 'unmatched') {
-              try {
-                const [existing] = await db.execute(
-                  'SELECT id, test_name, unit, reference_range FROM lab_templates WHERE LOWER(test_name) = LOWER(?) LIMIT 1',
-                  [finalTestName]
-                );
-
-                if (existing.length === 0) {
-                  await db.execute(
-                    `INSERT INTO lab_templates (test_name, test_code, description, sample_type, category, unit, reference_range, special_instructions, is_active)
-                     VALUES (?, NULL, NULL, NULL, ?, ?, ?, NULL, 1)`,
-                    [finalTestName, 'AUTO', finalUnit, finalReferenceRange]
-                  );
-                } else {
-                  finalUnit = finalUnit || existing[0].unit || null;
-                  finalReferenceRange = finalReferenceRange || existing[0].reference_range || null;
-                }
-              } catch (err) {
-                console.error('Failed to auto-create lab template:', err);
-              }
-            }
 
             try {
               const [insertResult] = await db.execute(
@@ -219,7 +202,7 @@ async function addRecord(req, res) {
                   finalUnit,
                   finalReferenceRange,
                   new Date(),
-                  `Extracted from: ${name}`
+                  `OCR extracted from: ${name}. Unverified: clinician must compare with original report.`
                 ]
               );
               insertedResults.push({
@@ -239,6 +222,8 @@ async function addRecord(req, res) {
             results: insertedResults,
             unmatchedCount: ocrResult.results.filter(r => r.confidence === 'unmatched').length
           };
+        } else {
+          extractedLabResults = { extracted: false, error: ocrResult.error || 'No lab values could be extracted.' };
         }
       } catch (ocrErr) {
         console.error('OCR extraction failed (non-critical):', ocrErr.message);

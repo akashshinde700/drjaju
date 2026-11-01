@@ -228,7 +228,7 @@ export default function Login() {
           </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+            <div role="alert" className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
               {error}
             </div>
           )}
@@ -236,10 +236,11 @@ export default function Login() {
           {!showOTP ? (
             <form onSubmit={handleCredentialSubmit} className="space-y-5">
               <div>
-                <label className="block text-sm font-medium mb-2 text-gray-700">
+                <label htmlFor="login-email" className="block text-sm font-medium mb-2 text-gray-700">
                   Email Address
                 </label>
                 <input
+                  id="login-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -255,12 +256,13 @@ export default function Login() {
 
               <div>
                 <div className="flex justify-between items-center mb-2">
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="login-password" className="block text-sm font-medium text-gray-700">
                     Password
                   </label>
                 </div>
                 <div className="relative">
                   <input
+                    id="login-password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -274,6 +276,8 @@ export default function Login() {
                   />
                   <button
                     type="button"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                   >

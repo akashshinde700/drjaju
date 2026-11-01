@@ -26,7 +26,8 @@ export default function BookAppointment() {
 
   const [allTimeSlots, setAllTimeSlots] = useState([]);
   const [doctorAvailability, setDoctorAvailability] = useState([]);
-  const [loadingSlots] = useState(false);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [slotsError, setSlotsError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
@@ -64,9 +65,15 @@ export default function BookAppointment() {
     }
   };
 
+  useEffect(() => () => clearTimeout(patientCheckTimeout.current), []);
+
   // Fetch doctor slots when appointment type or date changes
   useEffect(() => {
+    let active = true;
     const fetchDoctorSettings = async () => {
+      setLoadingSlots(true);
+      setSlotsError('');
+      setAllTimeSlots([]);
       try {
         // Build query params
         const slotsParams = {
@@ -83,6 +90,7 @@ export default function BookAppointment() {
           api.get(`/api/doctor-availability/${doctorParam}/availability`)
         ]);
 
+        if (!active) return;
         const slots = (slotsRes.data.slots || [])
           .filter(slot => slot.is_active)
           .map(slot => ({
@@ -93,22 +101,17 @@ export default function BookAppointment() {
         setDoctorAvailability(availRes.data.availability || []);
       } catch (error) {
         console.error('Error fetching doctor settings:', error);
-        // Fallback slots
-        setAllTimeSlots([
-          { dbTime: '12:15', displayTime: '12:15 PM' },
-          { dbTime: '12:30', displayTime: '12:30 PM' },
-          { dbTime: '12:45', displayTime: '12:45 PM' },
-          { dbTime: '13:00', displayTime: '01:00 PM' },
-          { dbTime: '18:00', displayTime: '06:00 PM' },
-          { dbTime: '18:30', displayTime: '06:30 PM' },
-          { dbTime: '19:00', displayTime: '07:00 PM' },
-          { dbTime: '19:30', displayTime: '07:30 PM' },
-          { dbTime: '20:00', displayTime: '08:00 PM' },
-        ]);
+        if (active) {
+          setAllTimeSlots([]);
+          setSlotsError('Unable to load available times. Please try another date or contact the clinic.');
+        }
+      } finally {
+        if (active) setLoadingSlots(false);
       }
     };
 
     fetchDoctorSettings();
+    return () => { active = false; };
   }, [doctorParam, bookingData.appointment_type, bookingData.preferred_date, api]);
 
   // Note: Booked slots are now filtered by the backend API when fetching slots
@@ -117,7 +120,7 @@ export default function BookAppointment() {
   const handleBookingSubmit = async (e) => {
     e.preventDefault();
 
-    if (!bookingData.appointment_time) {
+    if (loadingSlots || !allTimeSlots.some(slot => slot.dbTime === bookingData.appointment_time)) {
       addToast('Please select an appointment time', 'error');
       return;
     }
@@ -196,8 +199,9 @@ export default function BookAppointment() {
 
           {/* Name */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Full Name *</label>
+            <label htmlFor="booking-name" className="block text-sm font-semibold text-gray-700 mb-2">Full Name *</label>
             <input
+              id="booking-name"
               type="text"
               required
               value={bookingData.name}
@@ -209,8 +213,12 @@ export default function BookAppointment() {
 
           {/* Phone */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Phone Number *</label>
+            <label htmlFor="booking-phone" className="block text-sm font-semibold text-gray-700 mb-2">Phone Number *</label>
             <input
+              pattern="[0-9]{10}"
+              maxLength={10}
+              title="Enter a 10-digit phone number"
+              id="booking-phone"
               type="tel"
               required
               value={bookingData.phone}
@@ -222,8 +230,9 @@ export default function BookAppointment() {
 
           {/* Email */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Email (optional)</label>
+            <label htmlFor="booking-email" className="block text-sm font-semibold text-gray-700 mb-2">Email (optional)</label>
             <input
+              id="booking-email"
               type="email"
               value={bookingData.email}
               onChange={e => setBookingData({ ...bookingData, email: e.target.value })}
@@ -288,8 +297,9 @@ export default function BookAppointment() {
 
           {/* Date */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Preferred Date *</label>
+            <label htmlFor="booking-date" className="block text-sm font-semibold text-gray-700 mb-2">Preferred Date *</label>
             <input
+              id="booking-date"
               type="date"
               required
               min={getLocalDateString()}
@@ -344,7 +354,7 @@ export default function BookAppointment() {
                 </div>
               ) : (
                 <div className="text-center py-8 border-2 border-gray-200 rounded-xl">
-                  <p className="text-gray-500">No available slots for this date.</p>
+                  <p className="text-gray-500">{loadingSlots ? 'Loading available times…' : slotsError || 'No available slots for this date.'}</p>
                   <p className="text-sm text-gray-400 mt-1">Please select a different date.</p>
                 </div>
               )}
@@ -355,7 +365,7 @@ export default function BookAppointment() {
           <div className="flex gap-3 pt-4">
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || loadingSlots}
               className="w-full px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? 'Booking...' : 'Confirm Booking'}

@@ -22,7 +22,7 @@ const cacheablePatterns = [
 ];
 
 function getCacheKey(config) {
-  return config.url + (config.params ? JSON.stringify(config.params) : '');
+  return `${config.headers?.Authorization || 'anonymous'}:${config.url}:${JSON.stringify(config.params || {})}`;
 }
 
 function isCacheable(url) {
@@ -44,11 +44,13 @@ export function useApiClient() {
     api.interceptors.request.use((config) => {
       // Always attach the latest token (guards against stale axios instance headers)
       const latestToken = localStorage.getItem('token');
+      if (!latestToken) delete config.headers.Authorization;
       if (latestToken) {
         config.headers = config.headers || {};
         config.headers.Authorization = `Bearer ${latestToken}`;
       }
 
+      if (config.method !== 'get') responseCache.clear();
       if (config.method === 'get') {
         const key = getCacheKey(config);
 
@@ -83,6 +85,7 @@ export function useApiClient() {
 
           // Cache reference data responses
           if (isCacheable(response.config.url) && response.status === 200) {
+            if (responseCache.size >= 500) responseCache.delete(responseCache.keys().next().value);
             responseCache.set(key, {
               data: response.data,
               time: Date.now(),
@@ -99,7 +102,8 @@ export function useApiClient() {
         if (axios.isCancel(error)) {
           return Promise.reject(error);
         }
-        if (error.response?.status === 401) {
+        if (error.response?.status === 401 && error.config?.headers?.Authorization === `Bearer ${localStorage.getItem('token')}` && !error.config?.url?.startsWith('/api/auth/')) {
+          responseCache.clear();
           setToken('');
           setUser(null);
           localStorage.removeItem('token');

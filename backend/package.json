@@ -10,12 +10,14 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "setup-admin": "node seedUsers.js",
-    "check-db": "node -e \"require('dotenv').config();const mysql=require('mysql2/promise');(async()=>{const c=await mysql.createConnection({host:process.env.DB_HOST||'localhost',port:Number(process.env.DB_PORT||3306),user:process.env.DB_USER||'root',password:process.env.DB_PASSWORD||'',database:process.env.DB_NAME||'patient_management'});await c.ping();const [r]=await c.query('SELECT 1 AS ok');console.log('✅ DB OK',r[0]);await c.end();})().catch(e=>{console.error('❌ DB FAIL',e.message);process.exit(1);});\""
+    "check-db": "node -e \"require('dotenv').config();const mysql=require('mysql2/promise');(async()=>{const c=await mysql.createConnection({host:process.env.DB_HOST||'localhost',port:Number(process.env.DB_PORT||3306),user:process.env.DB_USER||'root',password:process.env.DB_PASSWORD||'',database:process.env.DB_NAME||'patient_management'});await c.ping();const [r]=await c.query('SELECT 1 AS ok');console.log('\u2705 DB OK',r[0]);await c.end();})().catch(e=>{console.error('\u274c DB FAIL',e.message);process.exit(1);});\"",
+    "test:ocr": "node scripts/test-ocr.cjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@napi-rs/canvas": "^1.1.0",
     "axios": "^1.13.4",
     "bcryptjs": "^3.0.3",
     "bull": "^4.16.5",
@@ -37,6 +39,7 @@
     "mysql2": "^3.15.3",
     "node-cache": "^5.1.2",
     "nodemailer": "^7.0.13",
+    "pdfjs-dist": "^6.4.299",
     "pdfkit": "^0.13.0",
     "puppeteer": "^24.33.0",
     "qrcode": "^1.5.4",
