@@ -99,18 +99,20 @@ export default function PrescriptionPreview() {
     try {
       if (method === 'whatsapp') {
         if (!patient?.phone) { addToast('Patient phone number not available', 'error'); return; }
+        if (!prescription?.id) { addToast('No prescription found', 'error'); return; }
         const message = generatePrescriptionMessage({
           patientName: patient.name,
           doctorName: prescription?.doctor_name || doctor?.name || 'Doctor',
           date: new Date(prescription?.created_at || Date.now()).toLocaleDateString('en-IN')
         });
-        openWhatsApp(patient.phone, message);
+        const pdfLink = `${apiBase.replace(/\/$/, '')}/api/pdf/prescription/${encodeURIComponent(prescription.id)}?with_letterhead=1`;
+        openWhatsApp(patient.phone, `${message}\n\nView or download the prescription PDF with clinic letterhead: ${pdfLink}`);
         addToast('Opening WhatsApp...', 'success');
       }
       if (method === 'attachment') { handlePrint(); }
       if (method === 'pdf') {
         if (!prescription?.id) { addToast('No prescription found', 'error'); return; }
-        const response = await api.get(`/api/prescriptions/pdf/${prescription.id}`, { responseType: 'blob' });
+        const response = await api.get(`/api/pdf/prescription/${prescription.id}?with_letterhead=1`, { responseType: 'blob' });
         const url = window.URL.createObjectURL(new Blob([response.data]));
         const link = document.createElement('a');
         link.href = url;
@@ -156,7 +158,7 @@ export default function PrescriptionPreview() {
   const vitals = prescription?.vitals || {};
   const hasVitals = Object.keys(vitals).some(k => vitals[k]);
   const medications = prescription?.medications || [];
-  const patientAge = patient?.dob ? calcAge(patient.dob) : (patient?.age_years || 'N/A');
+  const patientAge = patient?.dob ? calcAge(patient.dob) : (patient?.age_years ?? 'N/A');
 
   return (
     <div className="space-y-4">
@@ -423,7 +425,7 @@ export default function PrescriptionPreview() {
           className="px-4 py-2 border rounded hover:bg-slate-50 text-sm"
           onClick={() => {
             if (!prescription?.id) return;
-            const link = `${apiBase.replace(/\/$/, '')}/api/prescriptions/pdf/${prescription.id}`;
+            const link = `${apiBase.replace(/\/$/, '')}/api/pdf/prescription/${encodeURIComponent(prescription.id)}?with_letterhead=1`;
             navigator.clipboard.writeText(link).then(() => addToast('PDF link copied', 'success'));
           }}
         >
@@ -433,7 +435,7 @@ export default function PrescriptionPreview() {
           className="px-4 py-2 border rounded hover:bg-slate-50 text-sm"
           onClick={() => {
             if (!prescription?.id) return;
-            const link = `${apiBase.replace(/\/$/, '')}/api/prescriptions/pdf/${prescription.id}`;
+            const link = `${apiBase.replace(/\/$/, '')}/api/pdf/prescription/${encodeURIComponent(prescription.id)}?with_letterhead=1`;
             const qr = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(link)}`;
             window.open(qr, '_blank');
           }}

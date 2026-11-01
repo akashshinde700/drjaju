@@ -5,6 +5,8 @@ import { FaWhatsapp, FaQrcode } from 'react-icons/fa';
 import { useApiClient } from '../api/client';
 import { useToast } from '../hooks/useToast';
 
+const apiBase = (import.meta.env && import.meta.env.VITE_API_URL) || '';
+
 const PrintPrescription = () => {
   const api = useApiClient();
   const { addToast } = useToast();
@@ -54,7 +56,9 @@ const PrintPrescription = () => {
   // Download PDF
   const downloadPDF = async () => {
     try {
-      const response = await api.get(`/api/pdf/prescription/${prescriptionId}`, {
+      const params = new URLSearchParams({ with_letterhead: '1' });
+      if (prescription?.template_id) params.set('template_id', String(prescription.template_id));
+      const response = await api.get(`/api/pdf/prescription/${prescriptionId}?${params.toString()}`, {
         responseType: 'blob'
       });
       const blob = new Blob([response.data], { type: 'application/pdf' });
@@ -72,8 +76,16 @@ const PrintPrescription = () => {
     }
   };
 
-  // Share via WhatsApp
+  // Share via WhatsApp. Reserve the popup synchronously so the follow-up API
+  // request does not trigger the browser's popup blocker.
   const shareWhatsApp = async () => {
+    const whatsAppWindow = window.open('', '_blank');
+    if (!whatsAppWindow) {
+      addToast('Allow pop-ups to open WhatsApp', 'error');
+      return;
+    }
+    whatsAppWindow.opener = null;
+
     try {
       setSharing(true);
       const res = await api.post(`/api/prescriptions/${prescriptionId}/share`, {
@@ -81,14 +93,18 @@ const PrintPrescription = () => {
         billId
       });
       if (res.data?.shareUrl) {
-        window.open(res.data.shareUrl, '_blank');
+        whatsAppWindow.location.href = res.data.shareUrl;
+      } else {
+        whatsAppWindow.close();
       }
     } catch (error) {
       console.error('Error sharing via WhatsApp:', error);
-      // Fallback - open WhatsApp with basic message
-      const baseUrl = window.location.origin;
-      const message = encodeURIComponent(`View your prescription: ${baseUrl}/prescription/view/${prescriptionId}`);
-      window.open(`https://wa.me/?text=${message}`, '_blank');
+      // Fallback - share the public PDF endpoint directly, with the saved letterhead.
+      const params = new URLSearchParams({ with_letterhead: '1' });
+      if (prescription?.template_id) params.set('template_id', String(prescription.template_id));
+      const pdfUrl = `${apiBase.replace(/\/$/, '')}/api/pdf/prescription/${encodeURIComponent(prescriptionId)}?${params.toString()}`;
+      const message = encodeURIComponent(`View or download your prescription PDF with clinic letterhead: ${pdfUrl}`);
+      whatsAppWindow.location.href = `https://wa.me/?text=${message}`;
     } finally {
       setSharing(false);
     }
@@ -120,7 +136,9 @@ const PrintPrescription = () => {
   // Copy link to clipboard
   const copyShareLink = async () => {
     try {
-      const shareLink = `${window.location.origin}/prescription/view/${prescriptionId}`;
+      const params = new URLSearchParams({ with_letterhead: '1' });
+      if (prescription?.template_id) params.set('template_id', String(prescription.template_id));
+      const shareLink = `${apiBase.replace(/\/$/, '')}/api/pdf/prescription/${encodeURIComponent(prescriptionId)}?${params.toString()}`;
       await navigator.clipboard.writeText(shareLink);
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2000);
@@ -272,7 +290,7 @@ const PrintPrescription = () => {
               <h3 className="font-semibold text-gray-900 mb-2">PATIENT DETAILS</h3>
               <div className="space-y-1">
                 <p><span className="font-medium">Name:</span> {prescription.patient_name || prescription.patient?.name}</p>
-                <p><span className="font-medium">Age/Gender:</span> {prescription.age_years || prescription.patient?.age}y, {prescription.gender || prescription.patient?.gender}</p>
+                <p><span className="font-medium">Age/Gender:</span> {prescription.age_years ?? prescription.patient?.age ?? 'N/A'}y, {prescription.gender || prescription.patient?.gender}</p>
                 <p><span className="font-medium">Phone:</span> {prescription.patient_phone || prescription.patient?.phone}</p>
               </div>
             </div>

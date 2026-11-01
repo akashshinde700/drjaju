@@ -167,7 +167,7 @@ async function generatePrescriptionPDF({ prescriptionId, overrideTemplateId = nu
         pa.dob, pa.age_years, pa.gender,
         u.name as doctor_name, d.specialization, d.qualification, d.user_id as doctor_user_id,
         d.license_number, d.medical_council, d.signature_image,
-        c.name as clinic_name, c.phone as clinic_phone, c.address as clinic_address
+        c.id as clinic_id, c.name as clinic_name, c.phone as clinic_phone, c.address as clinic_address
       FROM prescriptions p
       LEFT JOIN patients pa ON p.patient_id = pa.id
       LEFT JOIN doctors d ON p.doctor_id = d.id
@@ -335,36 +335,16 @@ async function generatePrescriptionPDF({ prescriptionId, overrideTemplateId = nu
     ? 0
     : (printLayout ? marginBottomMm + contentBottomMm : 0);
 
-  let headerImg = null;
-  let footerImg = null;
+  let letterhead = null;
   if (withLetterhead) {
     try {
-      if (prescription.doctor_user_id) {
-        const [padConf] = await db.execute(
-          'SELECT header_image, footer_image FROM pad_configurations WHERE doctor_id = ? LIMIT 1',
-          [prescription.doctor_user_id],
-        );
-        if (padConf.length > 0) {
-          headerImg = padConf[0].header_image || null;
-          footerImg = padConf[0].footer_image || null;
-        }
-      }
-
-      const effectiveTemplateId = overrideTemplateId || prescription.template_id;
-      if (!headerImg && effectiveTemplateId) {
-        const [templates] = await db.execute(
-          'SELECT header_image, footer_image FROM receipt_templates WHERE id = ? LIMIT 1',
-          [effectiveTemplateId],
-        );
-        if (templates.length > 0) {
-          headerImg = templates[0].header_image || headerImg;
-          footerImg = templates[0].footer_image || footerImg;
-        }
-      }
+      letterhead = await resolvePrescriptionLetterhead(db, prescription, overrideTemplateId);
     } catch (e) {
       console.error('Letterhead fetch error:', e.message);
     }
   }
+  const headerImg = letterhead?.header_image || null;
+  const footerImg = letterhead?.footer_image || null;
 
   // ── Build HTML for prescription (Unicode-safe via headless Chrome) ─────────
   const prescDate = prescription.prescribed_date ? new Date(prescription.prescribed_date) : new Date();
@@ -488,7 +468,7 @@ async function generatePrescriptionPDF({ prescriptionId, overrideTemplateId = nu
 
   const ageGenderPhone = [
     prescription.gender,
-    prescription.age_years ? prescription.age_years + ' Yrs' : '',
+    prescription.age_years !== null && prescription.age_years !== undefined ? prescription.age_years + ' Yrs' : '',
     prescription.patient_phone ? 'Ph: ' + prescription.patient_phone : '',
     prescription.uhid ? 'UHID: ' + prescription.uhid : ''
   ].filter(Boolean).join(' | ');
@@ -600,21 +580,25 @@ async function generatePrescriptionPDF({ prescriptionId, overrideTemplateId = nu
   }
 
   let headerHTML = '';
-  if (withLetterhead && headerImg) {
-    const imgSrc = headerImg.startsWith('data:') ? headerImg : 'data:image/png;base64,' + headerImg;
-    headerHTML = `<div style="margin:-10mm -${padRightMm}mm 3mm -${padLeftMm}mm"><img src="${imgSrc}" style="width:100%;display:block"/></div>${headerRuleHTML}`;
-  } else if (withLetterhead) {
-    headerHTML = `<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1.5mm">
-        <span style="font-size:12pt;font-weight:bold;color:#c62828">${esc(prescription.clinic_name || 'CLINIC')}</span>
-      </div>
-      ${prescription.clinic_address || prescription.clinic_phone ? `<div style="font-size:7pt;color:#666;margin-bottom:2mm">${esc(prescription.clinic_address || '')}${prescription.clinic_phone ? ' | Ph: ' + esc(prescription.clinic_phone) : ''}</div>` : ''}
-      ${headerRuleHTML}`;
-  } else {
-    // No letterhead = the paper already carries one, so the band is reserved
-    // via the PDF's own top margin below (every sheet, not just the first —
-    // the clinic's whole stack is pre-printed stock). Nothing to draw here.
-    headerHTML = '';
+  if (withLetterhead) {
+    if (headerImg) {
+      headerHTML += `<div class="lh-img"><img src="${headerImg}"/></div>`;
+    }
+    if (letterhead?.header_content) {
+      headerHTML += `<div class="lh-content">${safeTemplateHtml(letterhead.header_content)}</div>`;
+    }
+    if (!headerImg && !letterhead?.header_content) {
+      headerHTML = `<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1.5mm">
+          <span style="font-size:12pt;font-weight:bold;color:#c62828">${esc(prescription.clinic_name || 'CLINIC')}</span>
+        </div>
+        ${prescription.clinic_address || prescription.clinic_phone ? `<div style="font-size:7pt;color:#666;margin-bottom:2mm">${esc(prescription.clinic_address || '')}${prescription.clinic_phone ? ' | Ph: ' + esc(prescription.clinic_phone) : ''}</div>` : ''}`;
+    }
+    headerHTML += headerRuleHTML;
   }
+
+  const footerContentHTML = withLetterhead && letterhead?.footer_content
+    ? `<div class="rx-footer-content">${safeTemplateHtml(letterhead.footer_content)}</div>`
+    : '';
 
   const html = `<!DOCTYPE html>
 <html lang="hi">
@@ -623,7 +607,11 @@ async function generatePrescriptionPDF({ prescriptionId, overrideTemplateId = nu
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;font-size:8.5pt;color:#111;padding:10mm ${padRightMm}mm 10mm ${padLeftMm}mm}
+  .lh-img{margin:-10mm -${padRightMm}mm 2mm -${padLeftMm}mm}
+  .lh-img img{width:100%;display:block}
+  .lh-content{font-size:8pt;color:#374151;margin-bottom:2mm}
   .header-rule{border-top:1.5px solid #003366;margin:1mm 0 2.5mm 0}
+  .rx-footer-content{margin-top:8mm;padding-top:2mm;border-top:1px solid #d1d5db;text-align:center;font-size:8pt;color:#475569;page-break-inside:avoid}
   .patient-block{padding:3px 7px;background:#f0f4ff;border-radius:3px;margin-bottom:2mm}
   .patient-row{display:flex;justify-content:space-between;align-items:baseline}
   .patient-name{font-size:9.75pt;font-weight:700;text-transform:uppercase;letter-spacing:0.2pt}
@@ -692,7 +680,8 @@ ${followUpDateStr ? `<div class="followup-box"><span class="fu-title">FOLLOW UP<
   ${prescription.qualification ? `<div style="font-size:7.5pt;color:#555">${esc(prescription.qualification)}</div>` : ''}
   ${prescription.license_number ? `<div style="font-size:7pt;color:#777">Reg. No: ${esc(prescription.license_number)}${prescription.medical_council ? ' (' + esc(prescription.medical_council) + ')' : ''}</div>` : ''}
 </div>
-${withLetterhead && footerImg ? `<div style="position:fixed;bottom:0;left:0;right:0"><img src="${footerImg.startsWith('data:') ? footerImg : 'data:image/png;base64,' + footerImg}" style="width:100%;display:block"/></div>` : ''}
+${footerContentHTML}
+${withLetterhead && footerImg ? `<div style="position:fixed;bottom:0;left:0;right:0"><img src="${footerImg}" style="width:100%;display:block"/></div>` : ''}
 </body></html>`;
 
   // ── Render HTML to PDF using puppeteer ────────────────────────────────────
@@ -864,6 +853,59 @@ async function resolveBillLetterhead(db, bill, overrideTemplateId = null) {
     source: 'clinic', template_id: null, template_name: null,
     header_image: null, header_content: null, footer_image: null, footer_content: null,
   };
+}
+
+/**
+ * Resolve the prescription letterhead. The selected/saved template takes
+ * priority, followed by the doctor's pad configuration and clinic default.
+ * Return text as well as image fields so both HTML and image-only templates
+ * print consistently on the generated/shared PDF.
+ */
+async function resolvePrescriptionLetterhead(db, prescription, overrideTemplateId = null) {
+  const soft = async (sql, params) => {
+    try { const [rows] = await db.execute(sql, params); return rows; } catch { return []; }
+  };
+  const shape = (row, source) => {
+    if (!row || !(row.header_image || row.header_content || row.footer_image || row.footer_content)) return null;
+    return {
+      source,
+      template_id: row.id ?? null,
+      template_name: row.template_name ?? null,
+      header_image: toImgSrc(row.header_image),
+      header_content: row.header_content || null,
+      footer_image: toImgSrc(row.footer_image),
+      footer_content: row.footer_content || null,
+    };
+  };
+  const templateColumns = 'id, template_name, header_image, header_content, footer_image, footer_content';
+  const selectedTemplateId = overrideTemplateId || prescription?.template_id;
+
+  if (selectedTemplateId) {
+    const rows = await soft(
+      `SELECT ${templateColumns} FROM receipt_templates WHERE id = ? LIMIT 1`,
+      [selectedTemplateId],
+    );
+    const selected = shape(rows[0], 'template');
+    if (selected) return selected;
+  }
+
+  if (prescription?.doctor_user_id) {
+    const rows = await soft(
+      `SELECT header_image, header_content, footer_image, footer_content
+         FROM pad_configurations WHERE doctor_id = ? LIMIT 1`,
+      [prescription.doctor_user_id],
+    );
+    const padLetterhead = shape(rows[0], 'pad');
+    if (padLetterhead) return padLetterhead;
+  }
+
+  const defaults = await soft(
+    `SELECT ${templateColumns} FROM receipt_templates
+      WHERE is_default = 1 AND (clinic_id = ? OR clinic_id IS NULL)
+      ORDER BY (clinic_id IS NULL) ASC, created_at DESC, id DESC LIMIT 1`,
+    [prescription?.clinic_id ?? null],
+  );
+  return shape(defaults[0], 'default_template');
 }
 
 // Receipts and certificates are one-sheet documents. When the content spills
@@ -1853,7 +1895,8 @@ async function generateLabReportPDF({ patientId, report_group = null }) {
   );
 
   yPosition += 6;
-  doc.text(`Age: ${patientData.age_years || 'N/A'} yrs | Gender: ${patientData.gender || 'N/A'}`, 15, yPosition);
+  const displayAge = patientData.age_years !== null && patientData.age_years !== undefined ? patientData.age_years : 'N/A';
+  doc.text(`Age: ${displayAge} yrs | Gender: ${patientData.gender || 'N/A'}`, 15, yPosition);
   if (patientData.uhid) {
     doc.text(`UHID: ${patientData.uhid}`, pageWidth - 60, yPosition);
   }
@@ -1998,6 +2041,7 @@ module.exports = {
   generatePrescriptionPDF,
   generateBillingPDF,
   resolveBillLetterhead,
+  resolvePrescriptionLetterhead,
   resolveCertificateLetterhead,
   loadPrintLayout,
   fitToOnePageScale,

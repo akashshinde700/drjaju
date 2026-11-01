@@ -36,11 +36,13 @@ const PrescriptionView = () => {
   }, [prescriptionId]);
 
   const handlePrint = () => {
-    window.print();
+    const params = new URLSearchParams({ with_letterhead: '1' });
+    window.open(`/api/pdf/prescription/${encodeURIComponent(prescriptionId)}?${params.toString()}`, '_blank');
   };
 
   const downloadPDF = () => {
-    window.open(`/api/pdf/prescription/${prescriptionId}`, '_blank');
+    const params = new URLSearchParams({ with_letterhead: '1' });
+    window.open(`/api/pdf/prescription/${encodeURIComponent(prescriptionId)}?${params.toString()}`, '_blank');
   };
 
   if (loading) {

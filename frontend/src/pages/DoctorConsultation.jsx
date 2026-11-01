@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { useApiClient } from '../api/client';
 import { useToast } from '../hooks/useToast';
 
+const apiBase = (import.meta.env && import.meta.env.VITE_API_URL) || '';
+
 const DoctorConsultation = ({ visitId }) => {
   const api = useApiClient();
   const { addToast } = useToast();
@@ -107,19 +109,19 @@ const DoctorConsultation = ({ visitId }) => {
     }
   };
 
-  // Share prescription
-  const sharePrescription = async () => {
-    if (bill?.prescriptionId) {
-      try {
-        const res = await api.get(`/api/pdf/prescription/${bill.prescriptionId}`);
-        if (res.data?.pdfUrl) {
-          // Share via WhatsApp or other methods
-          window.open(`https://wa.me/?text=${encodeURIComponent('Prescription: ' + res.data.pdfUrl)}`, '_blank');
-        }
-      } catch (error) {
-        console.error('Error sharing prescription:', error);
-      }
+  // Share the public PDF link so the patient receives the saved clinic letterhead.
+  const sharePrescription = () => {
+    if (!bill?.prescriptionId) return;
+    if (!patient?.phone) {
+      addToast('Patient phone number not available', 'error');
+      return;
     }
+
+    const pdfUrl = `${apiBase.replace(/\/$/, '')}/api/pdf/prescription/${encodeURIComponent(bill.prescriptionId)}?with_letterhead=1`;
+    const message = `Your prescription is ready. View or download the PDF with clinic letterhead: ${pdfUrl}`;
+    const phone = String(patient.phone).replace(/\D/g, '');
+    const formattedPhone = phone.length === 10 ? `91${phone}` : phone;
+    window.open(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
   useEffect(() => {

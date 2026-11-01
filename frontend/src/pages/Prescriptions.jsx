@@ -455,7 +455,7 @@ export default function Prescriptions() {
                           <FiTrash2 size={16} />
                         </button>
                         <button
-                          onClick={() => window.open(`/api/pdf/prescription/${prescription.id}`, '_blank')}
+                          onClick={() => window.open(`/api/pdf/prescription/${prescription.id}?with_letterhead=1`, '_blank')}
                           className="p-1 text-slate-600 hover:bg-slate-50 rounded"
                           title="Download"
                         >
