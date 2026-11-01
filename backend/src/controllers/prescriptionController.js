@@ -13,40 +13,75 @@ const { unwrapJsonText } = require('../utils/unwrapJsonText');
 const qrcode = require('qrcode');
 const emailService = require('../services/emailService');
 
-// Build the public, patient-facing prescription view URL. The frontend origin is
-// not known to the backend by default, so prefer FRONTEND_URL and fall back to the
-// request's own origin/referer.
+// Build absolute links using the configured frontend origin when available. Normalize
+// referers to their origin so a share URL never accidentally inherits the current page path.
+function getShareBaseUrl(req) {
+  const candidates = [
+    process.env.FRONTEND_URL,
+    process.env.CORS_ORIGIN,
+    req.get('origin'),
+    req.get('referer'),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      return new URL(candidate).origin.replace(/\/$/, '');
+    } catch (_error) {
+      // Ignore invalid values and try the next known origin.
+    }
+  }
+  return '';
+}
+
 function buildPrescriptionViewUrl(req, prescriptionId) {
-  const base = (process.env.FRONTEND_URL || process.env.CORS_ORIGIN || req.get('origin') || (req.get('referer') || '').replace(/\/[^/]*$/, '') || '').replace(/\/$/, '');
-  return `${base}/prescription/view/${prescriptionId}`;
+  const base = getShareBaseUrl(req);
+  return `${base}/prescription/view/${encodeURIComponent(prescriptionId)}`;
+}
+
+// The public PDF endpoint accepts the letterhead flag and resolves the template
+// saved on the prescription (or the clinic default), so the shared artifact is
+// the same branded document the doctor sees in Print/Download.
+function buildPrescriptionPdfUrl(req, prescriptionId, templateId = null) {
+  const forwardedProtocol = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  const forwardedHost = req.get('x-forwarded-host')?.split(',')[0]?.trim();
+  const requestOrigin = req.protocol && (forwardedHost || req.get('host'))
+    ? `${forwardedProtocol || req.protocol}://${forwardedHost || req.get('host')}`
+    : '';
+  const base = (
+    process.env.PUBLIC_API_URL || process.env.API_BASE_URL || process.env.BACKEND_URL ||
+    requestOrigin || getShareBaseUrl(req)
+  ).replace(/\/$/, '');
+  const params = new URLSearchParams({ with_letterhead: '1' });
+  if (templateId) params.set('template_id', String(templateId));
+  return `${base}/api/pdf/prescription/${encodeURIComponent(prescriptionId)}?${params.toString()}`;
 }
 
 // POST /api/prescriptions/:prescriptionId/share  { method: 'whatsapp'|'qrcode'|'email', email? }
-// Implements the Share button (previously called a non-existent endpoint). Uses only
-// the public view link (no PHI in the message) + the already-installed qrcode/email services.
 async function sharePrescription(req, res) {
   try {
     const { prescriptionId } = req.params;
-    const { method, email } = req.body || {};
+    const { method, email, template_id: templateId } = req.body || {};
     const viewUrl = buildPrescriptionViewUrl(req, prescriptionId);
+    const pdfUrl = buildPrescriptionPdfUrl(req, prescriptionId, templateId);
 
     if (method === 'whatsapp') {
-      const text = encodeURIComponent(`View your prescription: ${viewUrl}`);
-      return res.json({ success: true, shareUrl: `https://wa.me/?text=${text}`, viewUrl });
+      const text = encodeURIComponent(`Your prescription is ready. View or download the PDF with clinic letterhead: ${pdfUrl}`);
+      return res.json({ success: true, shareUrl: `https://wa.me/?text=${text}`, viewUrl, pdfUrl });
     }
     if (method === 'qrcode') {
-      const qrCode = await qrcode.toDataURL(viewUrl);
-      return res.json({ success: true, qrCode, shareUrl: viewUrl, viewUrl });
+      const qrCode = await qrcode.toDataURL(pdfUrl);
+      return res.json({ success: true, qrCode, shareUrl: pdfUrl, pdfUrl, viewUrl });
     }
     if (method === 'email') {
       if (!email) return res.status(400).json({ success: false, error: 'Email address is required' });
       await emailService.sendEmail({
         to: email,
         subject: 'Your Prescription',
-        html: `<p>Hello,</p><p>You can view your prescription here:</p><p><a href="${viewUrl}">${viewUrl}</a></p><p>Regards,</p>`,
-        text: `View your prescription: ${viewUrl}`,
+        html: `<p>Hello,</p><p>Your prescription PDF is ready with the clinic letterhead:</p><p><a href="${pdfUrl}">View or download prescription PDF</a></p><p>Regards,</p>`,
+        text: `View or download your prescription PDF with clinic letterhead: ${pdfUrl}`,
       });
-      return res.json({ success: true });
+      return res.json({ success: true, pdfUrl, viewUrl });
     }
     return res.status(400).json({ success: false, error: 'Invalid share method' });
   } catch (err) {
@@ -59,12 +94,14 @@ async function getShareOptions(req, res) {
   try {
     const { prescriptionId } = req.params;
     const viewUrl = buildPrescriptionViewUrl(req, prescriptionId);
-    const qrCode = await qrcode.toDataURL(viewUrl);
-    const text = encodeURIComponent(`View your prescription: ${viewUrl}`);
+    const pdfUrl = buildPrescriptionPdfUrl(req, prescriptionId);
+    const qrCode = await qrcode.toDataURL(pdfUrl);
+    const text = encodeURIComponent(`Your prescription is ready. View or download the PDF with clinic letterhead: ${pdfUrl}`);
     return res.json({
       success: true,
       sharing: {
         viewUrl,
+        pdfUrl,
         whatsapp: { url: `https://wa.me/?text=${text}` },
         qrCode,
       },
@@ -1491,6 +1528,8 @@ async function getPrescription(req, res) {
 
          pt.dob,
 
+         pt.age_years,
+
          pt.phone
 
        FROM prescriptions p
@@ -1702,6 +1741,8 @@ async function getPublicPrescriptionView(req, res) {
          pt.gender,
 
          pt.dob,
+
+         pt.age_years,
 
          pt.phone AS patient_phone,
 

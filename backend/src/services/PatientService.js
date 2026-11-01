@@ -9,7 +9,7 @@ const { generateUHID } = require('../utils/uhidHelper');
 class PatientService {
   /**
    * Create a new patient
-   * @param {Object} patientData - { name, email, phone, gender, dob, blood_group, address, city, state, pincode, primary_doctor_id, clinic_id }
+   * @param {Object} patientData - { name, email, phone, gender, dob, age_years, blood_group, address, city, state, pincode, primary_doctor_id, clinic_id }
    * @returns {Promise<Object>} Created patient
    */
   async create(patientData) {
@@ -19,6 +19,7 @@ class PatientService {
       phone,
       gender,
       dob,
+      age_years,
       blood_group,
       address,
       city,
@@ -32,6 +33,15 @@ class PatientService {
     // Validation
     if (!name) throw ApiError.badRequest('Patient name required', 'name');
     if (!clinic_id) throw ApiError.badRequest('Clinic ID required', 'clinic_id');
+
+    // Age can be entered directly when a patient does not know their DOB.
+    // Treat zero as a valid age (newborn) instead of dropping it as falsy.
+    const providedAgeYears = age_years === '' || age_years === undefined || age_years === null
+      ? null
+      : Number(age_years);
+    if (providedAgeYears !== null && (!Number.isInteger(providedAgeYears) || providedAgeYears < 0 || providedAgeYears > 150)) {
+      throw ApiError.badRequest('Age must be a whole number between 0 and 150', 'age_years');
+    }
 
     // Phone validation (basic, only if provided)
     const normalizedPhone = phone ? String(phone).replace(/\D/g, '') : '';
@@ -82,8 +92,10 @@ class PatientService {
         patient_id = `DRA${Date.now()}`;
       }
 
-      // Calculate age (only if dob provided)
-      const age_years = dob ? this._calculateAge(dob) : null;
+      // A DOB is the source of truth when one is provided; otherwise preserve
+      // the explicitly entered age so age-only registrations are not lost.
+      const calculatedAgeYears = dob ? this._calculateAge(dob) : null;
+      const savedAgeYears = calculatedAgeYears ?? providedAgeYears;
 
       // Create patient
       const [result] = await db.execute(`
@@ -99,7 +111,7 @@ class PatientService {
         email || null,
         normalizedPhone || null,
         dob || null,
-        age_years,
+        savedAgeYears,
         safeGender,
         blood_group || null,
         address || null,
@@ -348,7 +360,7 @@ class PatientService {
       // so those edits were silently dropped, and a phantom column would have
       // thrown a SQL error. Now matched to the real schema + edit form.
       const allowedFields = [
-        'name', 'email', 'phone', 'alternate_phone', 'gender', 'dob',
+        'name', 'email', 'phone', 'alternate_phone', 'gender', 'dob', 'age_years',
         'blood_group', 'address', 'landmark', 'city', 'district', 'state',
         'pincode', 'country', 'occupation', 'marital_status', 'education',
         'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relation',
@@ -365,9 +377,27 @@ class PatientService {
 
       const updates = {};
       Object.keys(updateData).forEach(key => {
-        if (allowedFields.includes(key) && updateData[key] !== undefined) {
-          updates[key] = enumFields.includes(key) && updateData[key] === '' ? null : updateData[key];
+        if (!allowedFields.includes(key) || updateData[key] === undefined) return;
+
+        if (key === 'age_years') {
+          if (updateData[key] === '' || updateData[key] === null) {
+            updates.age_years = null;
+            return;
+          }
+          const age = Number(updateData[key]);
+          if (!Number.isInteger(age) || age < 0 || age > 150) {
+            throw ApiError.badRequest('Age must be a whole number between 0 and 150', 'age_years');
+          }
+          updates.age_years = age;
+          return;
         }
+
+        if (key === 'dob' && updateData[key] === '') {
+          updates.dob = null;
+          return;
+        }
+
+        updates[key] = enumFields.includes(key) && updateData[key] === '' ? null : updateData[key];
       });
 
       // Re-validate phone if changed
@@ -386,9 +416,14 @@ class PatientService {
         }
       }
 
-      // Recalculate age if DOB changed
-      if (updates.dob) {
-        updates.age_years = this._calculateAge(updates.dob);
+      // Keep age in sync when DOB changes. Clearing DOB also clears a stale age
+      // unless the caller deliberately supplied a replacement age.
+      if (Object.prototype.hasOwnProperty.call(updates, 'dob')) {
+        if (updates.dob) {
+          updates.age_years = this._calculateAge(updates.dob);
+        } else if (!Object.prototype.hasOwnProperty.call(updates, 'age_years')) {
+          updates.age_years = null;
+        }
       }
 
       if (Object.keys(updates).length === 0) {
@@ -505,6 +540,8 @@ class PatientService {
   _calculateAge(dob) {
     const today = new Date();
     const birthDate = new Date(dob);
+    if (Number.isNaN(birthDate.getTime())) return null;
+
     let age = today.getFullYear() - birthDate.getFullYear();
     const monthDiff = today.getMonth() - birthDate.getMonth();
 

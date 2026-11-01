@@ -654,6 +654,12 @@ const ReferralsSettings = ({ api, addToast, user }) => {
   }, [fetchData]);
 
   const shareOnWhatsApp = async (ref) => {
+    const whatsAppWindow = window.open('', '_blank');
+    if (!whatsAppWindow) {
+      addToast('Allow pop-ups to open WhatsApp', 'error');
+      return;
+    }
+    whatsAppWindow.opener = null;
     const baseUrl = 'https://drjaju.com';
 
     // --- Fetch last prescription ID for PDF link ---
@@ -662,7 +668,7 @@ const ReferralsSettings = ({ api, addToast, user }) => {
       const rxRes = await api.get(`/api/prescriptions/${ref.patient_id}?limit=1`);
       const prescriptions = rxRes.data?.data?.prescriptions || rxRes.data?.prescriptions || [];
       if (prescriptions.length > 0) {
-        prescriptionLink = `${baseUrl}/api/pdf/prescription/${prescriptions[0].id}`;
+        prescriptionLink = `${baseUrl}/api/pdf/prescription/${encodeURIComponent(prescriptions[0].id)}?with_letterhead=1`;
       }
     } catch (e) { console.error('Prescription fetch:', e); }
 
@@ -684,7 +690,7 @@ const ReferralsSettings = ({ api, addToast, user }) => {
       `🏥 *PATIENT REFERRAL*\n━━━━━━━━━━━━━━━━━━\n\n` +
       `👨‍⚕️ *From:* Dr. ${doctorName}${doctorPhone ? `\n📞 ${doctorPhone}` : ''}\n\n` +
       `👤 *Patient:* ${ref.patient_name || 'N/A'}\n` +
-      `📱 ${ref.patient_phone || ''}${ref.patient_age ? ` | ${ref.patient_age}Y` : ''}${ref.patient_gender ? ` / ${ref.patient_gender}` : ''}\n\n` +
+      `📱 ${ref.patient_phone || ''}${ref.patient_age !== null && ref.patient_age !== undefined ? ` | ${ref.patient_age}Y` : ''}${ref.patient_gender ? ` / ${ref.patient_gender}` : ''}\n\n` +
       `🩺 *Reason:* ${ref.reason || 'Consultation'}\n` +
       `⚡ *Priority:* ${(ref.priority || 'routine').toUpperCase()}` +
       `${ref.notes ? `\n📝 *Notes:* ${ref.notes}` : ''}` +
@@ -695,9 +701,9 @@ const ReferralsSettings = ({ api, addToast, user }) => {
     const phone = (ref.referred_doctor_phone || '').replace(/[^0-9]/g, '');
     const formattedPhone = phone.length === 10 ? '91' + phone : phone;
     if (formattedPhone) {
-      window.open(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+      whatsAppWindow.location.href = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(msg)}`;
     } else {
-      window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
+      whatsAppWindow.location.href = `https://wa.me/?text=${encodeURIComponent(msg)}`;
     }
   };
 

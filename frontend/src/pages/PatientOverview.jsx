@@ -81,7 +81,7 @@ export default function PatientOverview() {
   const [_showEditVitalsModal, _setShowEditVitalsModal] = useState(false);
   const [_editVitalsForm, _setEditVitalsForm] = useState({ temp: '', height: '', weight: '', pulse: '', spo2: '', blood_pressure: '' });
   const [showLabUploadModal, setShowLabUploadModal] = useState(false);
-  const [shareWithLetterhead, setShareWithLetterhead] = useState(false);
+  const [shareWithLetterhead, setShareWithLetterhead] = useState(true);
   const [labUploadForm, setLabUploadForm] = useState({ test_name: '', reading: '', unit: '', date: getLocalDateString(), notes: '', reference_range: '' });
   const [labTemplates, setLabTemplates] = useState([]);
   const [labTemplateCategories, setLabTemplateCategories] = useState([]);
@@ -681,7 +681,7 @@ export default function PatientOverview() {
             <div className="p-3 bg-slate-50 rounded">
               <div className="text-xs text-slate-500 mb-1">Age</div>
               <div className="font-semibold text-slate-800">
-                {patient.dob ? calculateAge(patient.dob) : (patient.age_years || 'N/A')} years
+                {patient.dob ? calculateAge(patient.dob) : (patient.age_years ?? 'N/A')} years
               </div>
             </div>
             <div className="p-3 bg-slate-50 rounded">

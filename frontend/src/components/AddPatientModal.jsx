@@ -93,7 +93,7 @@ export default function AddPatientModal({ isOpen, onClose, onSuccess }) {
         email: form.email,
         phone: form.phone,
         dob: form.dob,
-        age_years: form.age_years || null,
+        age_years: form.age_years === '' ? null : Number(form.age_years),
         gender: form.gender,
         blood_group: form.blood_group,
         address: form.address,
@@ -253,7 +253,7 @@ export default function AddPatientModal({ isOpen, onClose, onSuccess }) {
                     <p className="text-xs text-gray-500">
                       ID: {duplicateWarning.patient.patient_id} &bull; Phone: {duplicateWarning.patient.phone}
                       {duplicateWarning.patient.gender && ` \u2022 ${duplicateWarning.patient.gender === 'M' ? 'Male' : duplicateWarning.patient.gender === 'F' ? 'Female' : duplicateWarning.patient.gender}`}
-                      {duplicateWarning.patient.age_years && ` \u2022 ${duplicateWarning.patient.age_years}y`}
+                      {duplicateWarning.patient.age_years !== null && duplicateWarning.patient.age_years !== undefined && ` \u2022 ${duplicateWarning.patient.age_years}y`}
                     </p>
                   </div>
                 </div>

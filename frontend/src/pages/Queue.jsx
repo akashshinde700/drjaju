@@ -13,6 +13,8 @@ import { getSelectedDoctorId, isAdmin } from '../utils/doctorUtils';
 import { getLocalDateString } from '../utils/localDate';
 import { dedupeVisits, visitSortTimeMs } from '../utils/visitDedupe';
 
+const apiBase = (import.meta.env && import.meta.env.VITE_API_URL) || '';
+
 const summaryCards = [
   { key: 'today', label: 'Today (Active)', count: 0 },
   { key: 'followups', label: 'Follow ups', count: 0 },
@@ -1621,6 +1623,13 @@ Thank you!`;
     const pid = resolvePatientDbId(apt);
     if (!pid) return;
 
+    const whatsAppWindow = window.open('', '_blank');
+    if (!whatsAppWindow) {
+      addToast('Allow pop-ups to open WhatsApp', 'error');
+      return;
+    }
+    whatsAppWindow.opener = null;
+
     try {
       const cachedRxId = rxCacheRef.current?.[String(pid)];
       let rx = cachedRxId ? { id: cachedRxId } : null;
@@ -1634,7 +1643,7 @@ Thank you!`;
       }
 
       if (rx) {
-        const pdfUrl = `${window.location.origin}/api/pdf/prescription/${rx.id}`;
+        const pdfUrl = `${apiBase.replace(/\/$/, '')}/api/pdf/prescription/${encodeURIComponent(rx.id)}?with_letterhead=1`;
         const message = `Hello ${apt.patient_name},
 
 📋 Your prescription has been attached.
@@ -1648,12 +1657,15 @@ Best regards,
 ${apt.clinic_name || 'Our Clinic'}
 
 Prescription Link: ${pdfUrl}`;
-
-        openWhatsApp(phone, message);
+        const cleanPhone = String(phone).replace(/\D/g, '');
+        const formattedPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+        whatsAppWindow.location.href = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(message)}`;
       } else {
+        whatsAppWindow.close();
         addToast('No prescription found for this patient', 'info');
       }
     } catch (error) {
+      whatsAppWindow.close();
       addToast('Failed to send prescription', 'error');
       console.error(error);
     }
@@ -1675,7 +1687,7 @@ Prescription Link: ${pdfUrl}`;
     try {
       const cachedRxId = rxCacheRef.current?.[String(pid)];
       if (cachedRxId) {
-        const url = `/api/pdf/prescription/${cachedRxId}`;
+        const url = `/api/pdf/prescription/${cachedRxId}?with_letterhead=1`;
         if (w) w.location.href = url;
         else window.open(url, '_blank');
         return;
@@ -1689,7 +1701,7 @@ Prescription Link: ${pdfUrl}`;
         return;
       }
       rxCacheRef.current[String(pid)] = rxId;
-      const url = `/api/pdf/prescription/${rxId}`;
+      const url = `/api/pdf/prescription/${rxId}?with_letterhead=1`;
       if (w) w.location.href = url;
       else window.open(url, '_blank');
     } catch (_e) {

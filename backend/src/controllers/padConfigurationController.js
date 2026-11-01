@@ -40,6 +40,8 @@ async function getPadConfiguration(req, res) {
           clinic_details: null,
           header_content: null,
           footer_content: null,
+          header_image: null,
+          footer_image: null,
           field_order: getDefaultFieldOrder(),
           sections: getDefaultSections()
         },
@@ -72,6 +74,8 @@ async function getPadConfiguration(req, res) {
 async function savePadConfiguration(req, res) {
   try {
     const doctorId = req.user?.id;
+    if (!doctorId) return res.status(401).json({ error: 'Not authenticated' });
+
     const {
       default_font_size,
       default_font_family,
@@ -84,70 +88,80 @@ async function savePadConfiguration(req, res) {
       footer_image,
       field_order,
       sections
-    } = req.body;
+    } = req.body || {};
 
     const db = getDb();
+    const fields = [
+      'default_font_size',
+      'default_font_family',
+      'signature_image_url',
+      'clinic_name',
+      'clinic_details',
+      'header_content',
+      'footer_content',
+      'header_image',
+      'footer_image',
+    ];
+    const suppliedFields = fields.filter(field => Object.prototype.hasOwnProperty.call(req.body || {}, field));
+    const layoutWasSupplied = field_order !== undefined || sections !== undefined;
 
-    // Check if config exists
-    const [existing] = await db.execute(
-      `SELECT id FROM pad_configurations WHERE doctor_id = ?`,
-      [doctorId]
-    );
-
-    if (existing.length > 0) {
-      // Update existing
-      await db.execute(
-        `UPDATE pad_configurations SET
-          default_font_size = ?,
-          default_font_family = ?,
-          signature_image_url = ?,
-          clinic_name = ?,
-          clinic_details = ?,
-          header_content = ?,
-          footer_content = ?,
-          header_image = ?,
-          footer_image = ?,
-          updated_at = NOW()
-        WHERE doctor_id = ?`,
-        [
-          default_font_size || 12,
-          default_font_family || 'Arial',
-          signature_image_url || null,
-          clinic_name || null,
-          clinic_details || null,
-          header_content || null,
-          footer_content || null,
-          header_image || null,
-          footer_image || null,
-          doctorId
-        ]
-      );
-    } else {
-      // Insert new
-      await db.execute(
-        `INSERT INTO pad_configurations
-          (doctor_id, default_font_size, default_font_family, signature_image_url, clinic_name, clinic_details, header_content, footer_content, header_image, footer_image)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          doctorId,
-          default_font_size || 12,
-          default_font_family || 'Arial',
-          signature_image_url || null,
-          clinic_name || null,
-          clinic_details || null,
-          header_content || null,
-          footer_content || null,
-          header_image || null,
-          footer_image || null
-        ]
-      );
+    if (suppliedFields.length === 0 && !layoutWasSupplied) {
+      return res.status(400).json({ error: 'At least one pad setting is required' });
     }
 
-    // Save field order and sections to rx_template_config if provided
-    if (field_order || sections) {
-      const templateContent = JSON.stringify({ field_order, sections });
+    // The settings form saves header/footer images independently of the other
+    // pad fields. Update only values present in the request so saving an image
+    // never clears the doctor's signature, clinic details, or custom text.
+    const normalizeValue = (field, value) => {
+      if (field === 'default_font_size') {
+        const size = Number(value);
+        return Number.isFinite(size) && size > 0 ? size : 12;
+      }
+      if (field === 'default_font_family') return value ? String(value) : 'Arial';
+      return value === '' || value === undefined ? null : value;
+    };
+    const normalized = Object.fromEntries(suppliedFields.map(field => [
+      field,
+      normalizeValue(field, req.body[field]),
+    ]));
 
-      // Check if default layout config exists
+    if (suppliedFields.length > 0) {
+      const [existing] = await db.execute(
+        'SELECT id FROM pad_configurations WHERE doctor_id = ?',
+        [doctorId]
+      );
+
+      if (existing.length > 0) {
+        const assignments = suppliedFields.map(field => `${field} = ?`).join(', ');
+        await db.execute(
+          `UPDATE pad_configurations SET ${assignments}, updated_at = NOW() WHERE doctor_id = ?`,
+          [...suppliedFields.map(field => normalized[field]), doctorId]
+        );
+      } else {
+        const defaults = {
+          default_font_size: 12,
+          default_font_family: 'Arial',
+          signature_image_url: null,
+          clinic_name: null,
+          clinic_details: null,
+          header_content: null,
+          footer_content: null,
+          header_image: null,
+          footer_image: null,
+        };
+        const config = { ...defaults, ...normalized };
+        await db.execute(
+          `INSERT INTO pad_configurations
+            (doctor_id, ${fields.join(', ')})
+           VALUES (?, ${fields.map(() => '?').join(', ')})`,
+          [doctorId, ...fields.map(field => config[field])]
+        );
+      }
+    }
+
+    // Save field order and sections to rx_template_config if provided.
+    if (layoutWasSupplied) {
+      const templateContent = JSON.stringify({ field_order, sections });
       const [existingTemplate] = await db.execute(
         `SELECT id FROM rx_template_config WHERE doctor_id = ? AND template_type = 'layout' AND is_default = 1`,
         [doctorId]
@@ -171,7 +185,6 @@ async function savePadConfiguration(req, res) {
       success: true,
       message: 'Pad configuration saved successfully'
     });
-
   } catch (error) {
     console.error('Save pad configuration error:', error);
     res.status(500).json({

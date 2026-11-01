@@ -408,9 +408,9 @@ export default function Patients() {
                 const genderLabel = p.gender === 'M' ? 'Male' : p.gender === 'F' ? 'Female' : p.gender || '';
                 const genderCls = GENDER_COLORS[genderLabel] || 'bg-gray-100 text-gray-600';
                 const bloodCls = BLOOD_COLORS[p.blood_group] || 'bg-gray-50 text-gray-500';
-                const age = p.dob
+                const age = p.age_years ?? (p.dob
                   ? Math.floor((Date.now() - new Date(p.dob).getTime()) / (365.25 * 86400000))
-                  : (p.age_years || null);
+                  : null);
 
                 return (
                   <div
@@ -436,7 +436,7 @@ export default function Patients() {
                         <p className="font-semibold text-gray-900 truncate group-hover:text-blue-700 transition-colors text-sm">{p.name}</p>
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           {genderLabel && <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${genderCls}`}>{genderLabel}</span>}
-                          {age && <span className="text-xs text-gray-400">{age}y</span>}
+                          {age !== null && age !== undefined && <span className="text-xs text-gray-400">{age}y</span>}
                         </div>
                       </div>
                     </div>
@@ -520,9 +520,9 @@ export default function Patients() {
               {patients.map((p, idx) => {
                 const genderLabel = p.gender === 'M' ? 'Male' : p.gender === 'F' ? 'Female' : p.gender || '';
                 const genderCls = GENDER_COLORS[genderLabel] || 'bg-gray-100 text-gray-600';
-                const age = p.dob
+                const age = p.age_years ?? (p.dob
                   ? Math.floor((Date.now() - new Date(p.dob).getTime()) / (365.25 * 86400000))
-                  : (p.age_years || null);
+                  : null);
                 const isSelected = selectedPatients.includes(p.id);
 
                 return (
@@ -546,7 +546,7 @@ export default function Patients() {
                         </div>
                         <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                           {genderLabel && <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${genderCls}`}>{genderLabel}</span>}
-                          {age && <span className="text-xs text-gray-400">{age}y</span>}
+                          {age !== null && age !== undefined && <span className="text-xs text-gray-400">{age}y</span>}
                           {p.phone && <span className="text-xs text-gray-500">{p.phone}</span>}
                         </div>
                         {/* ABHA on mobile */}

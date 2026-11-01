@@ -2,6 +2,23 @@ import { useState, useEffect } from 'react';
 import { useToast } from '../hooks/useToast';
 import { useApiClient } from '../api/client';
 
+const asImageSrc = (value) => {
+  if (!value) return '';
+  const src = String(value);
+  return src.startsWith('data:') || /^https?:\/\//i.test(src)
+    ? src
+    : `data:image/png;base64,${src}`;
+};
+
+const readImageDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => typeof reader.result === 'string'
+    ? resolve(reader.result)
+    : reject(new Error('Could not read image file'));
+  reader.onerror = () => reject(reader.error || new Error('Could not read image file'));
+  reader.readAsDataURL(file);
+});
+
 export default function RxTemplateConfig() {
   const { addToast } = useToast();
   const api = useApiClient();
@@ -12,6 +29,11 @@ export default function RxTemplateConfig() {
   const [letterheadFile, setLetterheadFile] = useState(null);
   const [headerFile, setHeaderFile] = useState(null);
   const [footerFile, setFooterFile] = useState(null);
+  const [headerImage, setHeaderImage] = useState('');
+  const [footerImage, setFooterImage] = useState('');
+  const [headerImageChanged, setHeaderImageChanged] = useState(false);
+  const [footerImageChanged, setFooterImageChanged] = useState(false);
+  const [readingImages, setReadingImages] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // Margin & content area config
@@ -31,21 +53,36 @@ export default function RxTemplateConfig() {
     setMargins(prev => ({ ...prev, [key]: num }));
   };
 
-  // These values drive the SERVER-rendered PDF, so the server is the source of
-  // truth — localStorage alone could never change what actually prints.
+  // Load persisted print geometry and pad letterhead art from the server.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.get('/api/pad-config/print-layout');
-        const layout = res.data?.layout;
-        if (!cancelled && layout && typeof layout === 'object') {
+    const loadSettings = async () => {
+      const [layoutResult, padResult] = await Promise.allSettled([
+        api.get('/api/pad-config/print-layout'),
+        api.get('/api/pad-config'),
+      ]);
+
+      if (cancelled) return;
+
+      if (layoutResult.status === 'fulfilled') {
+        const layout = layoutResult.value.data?.layout;
+        if (layout && typeof layout === 'object') {
           setMargins(prev => ({ ...prev, ...layout }));
         }
-      } catch {
-        /* keep whatever is on screen; save will surface any real problem */
       }
-    })();
+
+      if (padResult.status === 'fulfilled') {
+        const config = padResult.value.data?.config || {};
+        setHeaderImage(config.header_image || '');
+        setFooterImage(config.footer_image || '');
+        setHeaderFile(null);
+        setFooterFile(null);
+        setHeaderImageChanged(false);
+        setFooterImageChanged(false);
+      }
+    };
+
+    loadSettings();
     return () => { cancelled = true; };
   }, [api]);
 
@@ -62,41 +99,82 @@ export default function RxTemplateConfig() {
     { name: 'Follow Up', icon: '🔄', color: 'text-indigo-600', bgColor: 'bg-indigo-50' }
   ];
 
-  const handleFileUpload = (type, file) => {
-    if (file) {
-      switch (type) {
-        case 'letterhead':
-          setLetterheadFile(file);
-          addToast('Letterhead uploaded successfully', 'success');
-          break;
-        case 'header':
-          setHeaderFile(file);
-          addToast('Header uploaded successfully', 'success');
-          break;
-        case 'footer':
-          setFooterFile(file);
-          addToast('Footer uploaded successfully', 'success');
-          break;
+  const handleFileUpload = async (type, file) => {
+    if (!file) return;
+
+    if (type === 'letterhead') {
+      setLetterheadFile(file);
+      addToast('For generated prescriptions, upload the header and footer images below, then save.', 'info');
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      addToast('Please select an image file', 'error');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      addToast('Image size should be less than 2MB', 'error');
+      return;
+    }
+
+    setReadingImages(true);
+    try {
+      const dataUrl = await readImageDataUrl(file);
+      if (type === 'header') {
+        setHeaderFile(file);
+        setHeaderImage(dataUrl);
+        setHeaderImageChanged(true);
+      } else if (type === 'footer') {
+        setFooterFile(file);
+        setFooterImage(dataUrl);
+        setFooterImageChanged(true);
       }
+      addToast(`${type === 'header' ? 'Header' : 'Footer'} ready — save configuration to store it`, 'success');
+    } catch {
+      addToast(`Failed to read ${type} image`, 'error');
+    } finally {
+      setReadingImages(false);
     }
   };
 
   const handleDownload = (type) => {
-    // Mock download functionality
-    addToast(`${type} download initiated`, 'info');
+    const image = type === 'Header' ? headerImage : type === 'Footer' ? footerImage : '';
+    if (!image) {
+      addToast(`${type} image is not saved`, 'info');
+      return;
+    }
+
+    const src = asImageSrc(image);
+    const mimeSubtype = /^data:image\/([^;]+)/i.exec(src)?.[1] || 'png';
+    const extension = mimeSubtype === 'jpeg' ? 'jpg' : mimeSubtype;
+    const link = document.createElement('a');
+    link.href = src;
+    link.download = `${type.toLowerCase()}.${extension}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   };
 
   const handleSave = async () => {
     setLoading(true);
     try {
-      // Persist server-side FIRST — the PDF generator reads it from there.
-      // This used to only write localStorage (which the server cannot see) and
-      // then report success, so print output never changed.
+      // Persist server-side — both the PDF generator and cross-device sessions
+      // read these settings from the database.
       const res = await api.post('/api/pad-config/print-layout', { layout: margins });
       const saved = res.data?.layout;
       if (saved && typeof saved === 'object') setMargins(prev => ({ ...prev, ...saved }));
       localStorage.setItem('rxTemplateMargins', JSON.stringify(saved || margins));
-      addToast('Print layout saved — new prescriptions will print with these margins', 'success');
+
+      const letterheadChanges = {};
+      if (headerImageChanged) letterheadChanges.header_image = headerImage || null;
+      if (footerImageChanged) letterheadChanges.footer_image = footerImage || null;
+      if (Object.keys(letterheadChanges).length > 0) {
+        await api.post('/api/pad-config', letterheadChanges);
+        setHeaderImageChanged(false);
+        setFooterImageChanged(false);
+      }
+
+      addToast('Print layout and letterhead settings saved successfully', 'success');
     } catch (err) {
       addToast(err?.response?.data?.error || 'Failed to save configuration', 'error');
     } finally {
@@ -112,7 +190,11 @@ export default function RxTemplateConfig() {
     setLetterheadFile(null);
     setHeaderFile(null);
     setFooterFile(null);
-    addToast('Configuration reset to defaults', 'info');
+    setHeaderImage('');
+    setFooterImage('');
+    setHeaderImageChanged(true);
+    setFooterImageChanged(true);
+    addToast('Configuration reset — save to apply the defaults', 'info');
   };
 
   return (
@@ -262,52 +344,80 @@ export default function RxTemplateConfig() {
           {/* Header/Footer */}
           <div className="space-y-3">
             <h3 className="font-semibold">Header & Footer</h3>
+            <p className="text-xs text-gray-500">Images are saved to your account and included in prescriptions shared with the letterhead option.</p>
             <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 border rounded">
-                <span className="text-sm">Header Image</span>
-                <div className="flex gap-2 items-center">
-                  <label className="px-2 py-1 bg-green-600 text-white text-xs rounded cursor-pointer hover:bg-green-700">
-                    Upload
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload('header', e.target.files[0])}
-                    />
-                  </label>
-                  {headerFile && (
-                    <span className="text-xs text-gray-600 truncate max-w-[140px]">{headerFile.name}</span>
-                  )}
-                  <button
-                    className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
-                    onClick={() => handleDownload('Header')}
-                  >
-                    Download
-                  </button>
+              <div className="p-3 border rounded space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">Header Image</span>
+                  <div className="flex gap-2 items-center">
+                    <label className="px-2 py-1 bg-green-600 text-white text-xs rounded cursor-pointer hover:bg-green-700">
+                      Upload
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept="image/*"
+                        onChange={(e) => handleFileUpload('header', e.target.files[0])}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                      onClick={() => handleDownload('Header')}
+                    >
+                      Download
+                    </button>
+                    {headerImage && (
+                      <button
+                        type="button"
+                        className="px-2 py-1 text-red-600 text-xs rounded hover:bg-red-50"
+                        onClick={() => { setHeaderImage(''); setHeaderFile(null); setHeaderImageChanged(true); }}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
                 </div>
+                {(headerFile?.name || headerImage) && (
+                  <p className="text-xs text-gray-500 truncate">{headerFile?.name || 'Saved header image'}</p>
+                )}
+                {headerImage && <img src={asImageSrc(headerImage)} alt="Prescription header preview" className="max-h-20 max-w-full object-contain border rounded p-1" />}
               </div>
-              <div className="flex items-center justify-between p-3 border rounded">
-                <span className="text-sm">Footer Image</span>
-                <div className="flex gap-2 items-center">
-                  <label className="px-2 py-1 bg-green-600 text-white text-xs rounded cursor-pointer hover:bg-green-700">
-                    Upload
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload('footer', e.target.files[0])}
-                    />
-                  </label>
-                  {footerFile && (
-                    <span className="text-xs text-gray-600 truncate max-w-[140px]">{footerFile.name}</span>
-                  )}
-                  <button
-                    className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
-                    onClick={() => handleDownload('Footer')}
-                  >
-                    Download
-                  </button>
+
+              <div className="p-3 border rounded space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">Footer Image</span>
+                  <div className="flex gap-2 items-center">
+                    <label className="px-2 py-1 bg-green-600 text-white text-xs rounded cursor-pointer hover:bg-green-700">
+                      Upload
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept="image/*"
+                        onChange={(e) => handleFileUpload('footer', e.target.files[0])}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                      onClick={() => handleDownload('Footer')}
+                    >
+                      Download
+                    </button>
+                    {footerImage && (
+                      <button
+                        type="button"
+                        className="px-2 py-1 text-red-600 text-xs rounded hover:bg-red-50"
+                        onClick={() => { setFooterImage(''); setFooterFile(null); setFooterImageChanged(true); }}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
                 </div>
+                {(footerFile?.name || footerImage) && (
+                  <p className="text-xs text-gray-500 truncate">{footerFile?.name || 'Saved footer image'}</p>
+                )}
+                {footerImage && <img src={asImageSrc(footerImage)} alt="Prescription footer preview" className="max-h-20 max-w-full object-contain border rounded p-1" />}
               </div>
             </div>
           </div>
@@ -424,9 +534,9 @@ export default function RxTemplateConfig() {
           <button
             className="px-4 py-2 bg-primary text-white rounded hover:bg-primary/90 disabled:opacity-50"
             onClick={handleSave}
-            disabled={loading}
+            disabled={loading || readingImages}
           >
-            {loading ? 'Saving...' : 'Save Configuration'}
+            {readingImages ? 'Reading image...' : loading ? 'Saving...' : 'Save Configuration'}
           </button>
         </div>
       </div>
